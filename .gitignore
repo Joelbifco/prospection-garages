@@ -1,0 +1,14 @@
+# Données personnelles — NE JAMAIS envoyer sur GitHub
+# (contacts, réglages, mot de passe Gmail, historique d'envois)
+data/
+
+# Réinstallé automatiquement, inutile sur GitHub
+node_modules/
+
+# Moteur Node intégré (version portable) et paquets
+node.exe
+*.zip
+
+# Réglages locaux de l'éditeur / synchro OneDrive (propre à chaque ordinateur)
+.claude/
+SYNC-ONEDRIVE.txt

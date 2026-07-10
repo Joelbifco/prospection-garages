@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prospection Garages — Bifco</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">⚙️</span>
+      <div>
+        <h1>Prospection Garages</h1>
+        <p class="tag">Trouver des garages · composer · envoyer · mesurer</p>
+      </div>
+    </div>
+    <div class="badges">
+      <div id="sync-badge" class="badge badge-ok hidden" title="Tes données sont synchronisées entre tes ordinateurs via OneDrive">🔄 Sync OneDrive</div>
+      <div id="smtp-badge" class="badge badge-warn">SMTP non configuré</div>
+      <button id="btn-logout" class="ghost hidden" style="padding:6px 12px;font-size:13px">Déconnexion</button>
+    </div>
+  </header>
+
+  <nav id="tabs">
+    <button data-tab="recherche" class="active">🔎 Recherche</button>
+    <button data-tab="contacts">📇 Contacts</button>
+    <button data-tab="entonnoir">🎯 Entonnoir</button>
+    <button data-tab="courriels">✉️ Courriels</button>
+    <button data-tab="envoi">📤 Envoi</button>
+    <button data-tab="stats">📊 Stats</button>
+    <button data-tab="auto">🤖 Auto</button>
+    <button data-tab="reglages">⚙️ Réglages</button>
+  </nav>
+
+  <main>
+    <!-- ============ RECHERCHE ============ -->
+    <section id="tab-recherche" class="tab active">
+      <div class="card">
+        <h2>Trouver des garages dans une zone</h2>
+        <p class="hint">Entre une ville, un quartier, une région ou un code postal. L'outil interroge l'annuaire public OpenStreetMap et va chercher les courriels sur les sites web des garages.</p>
+        <div class="search-row">
+          <input id="zone" type="text" placeholder="Ex. : Laval, Québec  ·  Trois-Rivières  ·  Rive-Sud Montréal" />
+          <label class="rk">Rayon
+            <select id="radius">
+              <option value="5">5 km</option>
+              <option value="10">10 km</option>
+              <option value="15" selected>15 km</option>
+              <option value="25">25 km</option>
+              <option value="40">40 km</option>
+            </select>
+          </label>
+          <label class="chk"><input type="checkbox" id="small-only" checked /> Petits garages seulement (exclure concessionnaires)</label>
+          <label class="chk"><input type="checkbox" id="scrape" checked /> Chercher les courriels sur les sites</label>
+          <button id="btn-search" class="primary">Rechercher</button>
+        </div>
+        <div id="search-status" class="status"></div>
+      </div>
+
+      <div id="search-results" class="card hidden">
+        <div class="results-head">
+          <h3 id="results-summary"></h3>
+          <div>
+            <label class="chk"><input type="checkbox" id="only-email" checked /> Seulement avec courriel</label>
+            <button id="btn-selall" class="ghost">Tout cocher</button>
+            <button id="btn-import" class="primary">Ajouter aux contacts</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="results-table">
+            <thead>
+              <tr><th></th><th>Garage</th><th>Courriel</th><th>Téléphone</th><th>Ville</th><th>Site</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CONTACTS ============ -->
+    <section id="tab-contacts" class="tab">
+      <div class="card">
+        <div class="results-head">
+          <h2>Mes contacts (<span id="contacts-count">0</span>)</h2>
+          <div>
+            <select id="contacts-region"><option value="">Toutes les régions</option></select>
+            <select id="contacts-stage"><option value="">Tous les stades</option></select>
+            <input id="contacts-filter" placeholder="Filtrer…" />
+            <button id="btn-add-contact" class="ghost">+ Ajouter</button>
+            <button id="btn-del-contacts" class="danger">Supprimer la sélection</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="contacts-table">
+            <thead>
+              <tr><th></th><th>Garage</th><th>Courriel</th><th>Région</th><th>Courriels</th><th>Stade</th><th>Statut</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ ENTONNOIR ============ -->
+    <section id="tab-entonnoir" class="tab">
+      <div class="card">
+        <h2>🎯 Entonnoir de prospection</h2>
+        <p class="hint">Tes leads classés par stade (selon le nombre de courriels reçus) et regroupés par région. Fais avancer tes garages du « Nouveau » au « Partenaire ».</p>
+        <div id="funnel-bars" class="funnel-bars"></div>
+      </div>
+      <div class="card">
+        <div class="results-head">
+          <h2>Par région</h2>
+          <span class="hint" style="margin:0">Nombre de leads à chaque stade, par région.</span>
+        </div>
+        <div class="table-wrap">
+          <table id="funnel-table">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ COURRIELS ============ -->
+    <section id="tab-courriels" class="tab">
+      <div class="split">
+        <div class="card side">
+          <h2>Modèles</h2>
+          <ul id="template-list"></ul>
+          <button id="btn-new-template" class="ghost full">+ Nouveau modèle</button>
+        </div>
+        <div class="card grow">
+          <h2>Rédaction</h2>
+          <label>Nom du modèle
+            <input id="tpl-name" placeholder="Ex. : Invitation partenariat" />
+          </label>
+          <label>Objet
+            <input id="tpl-subject" placeholder="Objet du courriel" />
+          </label>
+          <label>Message
+            <textarea id="tpl-body" rows="14" placeholder="Bonjour {{nom}}, …"></textarea>
+          </label>
+          <p class="hint">Variables : <code>{{nom}}</code> <code>{{ville}}</code> <code>{{courriel}}</code> <code>{{telephone}}</code>. Un pied de page de désabonnement et ta signature sont ajoutés automatiquement.</p>
+          <div class="row-btns">
+            <button id="btn-save-template" class="primary">Enregistrer</button>
+            <button id="btn-preview" class="ghost">Aperçu</button>
+            <button id="btn-del-template" class="danger">Supprimer</button>
+            <button id="btn-ai" class="ghost">💡 Idées de texte</button>
+          </div>
+          <div id="preview-box" class="preview hidden"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ ENVOI ============ -->
+    <section id="tab-envoi" class="tab">
+      <div class="card">
+        <h2>Envoyer une campagne</h2>
+        <div id="wu-banner" class="wu-banner hidden"></div>
+        <div class="send-controls">
+          <label>Modèle
+            <select id="send-template"></select>
+          </label>
+          <label>Filtrer les contacts
+            <select id="send-filter">
+              <option value="nouveau">Nouveaux seulement</option>
+              <option value="all">Tous</option>
+              <option value="contacté">Déjà contactés</option>
+            </select>
+          </label>
+          <button id="btn-selall-send" class="ghost">Tout cocher</button>
+          <button id="btn-send" class="primary">📤 Envoyer aux sélectionnés</button>
+        </div>
+        <p class="hint">Un délai est appliqué entre chaque envoi (voir Réglages) pour protéger la réputation de ton adresse. Garde la fenêtre ouverte pendant l'envoi.</p>
+        <div id="send-status" class="status"></div>
+        <div class="table-wrap">
+          <table id="send-table">
+            <thead><tr><th></th><th>Garage</th><th>Courriel</th><th>Ville</th><th>Statut</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ STATS ============ -->
+    <section id="tab-stats" class="tab">
+      <div class="stat-grid" id="stat-grid"></div>
+      <div class="split">
+        <div class="card grow">
+          <h2>Journal des envois</h2>
+          <div class="table-wrap">
+            <table id="log-table">
+              <thead><tr><th>Date</th><th>Garage</th><th>Courriel</th><th>Zone</th><th>Statut</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card side">
+          <h2>Par zone</h2>
+          <ul id="zone-list" class="barlist"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ AUTOMATISATION ============ -->
+    <section id="tab-auto" class="tab">
+      <div class="card">
+        <h2>🤖 Envoi automatique quotidien</h2>
+        <p class="hint">Chaque jour, l'app trouve de nouveaux garages dans tes zones puis envoie le quota du jour (selon le mode réchauffement), sans que tu cliques. Ça tourne <b>tant que l'app est ouverte</b> — ouvre-la une fois par jour et laisse-la faire.</p>
+
+        <div id="auto-banner" class="wu-banner"></div>
+
+        <label class="chk-inline" style="margin-top:4px"><input type="checkbox" id="auto-enabled" /> Activer l'envoi automatique quotidien</label>
+
+        <label>Modèle de courriel à utiliser
+          <select id="auto-template"></select>
+        </label>
+
+        <label>Zones à prospecter (une par ligne — l'app tourne dessus l'une après l'autre)
+          <textarea id="auto-zones" rows="5" placeholder="Laval, Québec&#10;Longueuil, Québec&#10;Trois-Rivières, Québec&#10;Sherbrooke, Québec"></textarea>
+        </label>
+
+        <div class="two">
+          <label>Rayon par zone
+            <select id="auto-radius">
+              <option value="5">5 km</option>
+              <option value="10">10 km</option>
+              <option value="15" selected>15 km</option>
+              <option value="25">25 km</option>
+              <option value="40">40 km</option>
+            </select>
+          </label>
+          <label>Quota/jour si réchauffement désactivé
+            <select id="auto-limit">
+              <option value="10">10</option>
+              <option value="20" selected>20</option>
+              <option value="30">30</option>
+              <option value="50">50</option>
+            </select>
+          </label>
+        </div>
+        <label class="chk-inline"><input type="checkbox" id="auto-small" checked /> Petits garages seulement (exclure concessionnaires)</label>
+
+        <div class="row-btns">
+          <button id="btn-save-auto" class="primary">Enregistrer</button>
+          <button id="btn-run-auto" class="ghost">▶️ Lancer maintenant</button>
+        </div>
+        <div id="auto-status" class="status"></div>
+        <div id="auto-last" class="preview hidden"></div>
+      </div>
+    </section>
+
+    <!-- ============ RÉGLAGES ============ -->
+    <section id="tab-reglages" class="tab">
+      <div class="card" style="max-width:640px">
+        <h2>Réglages d'envoi (SMTP)</h2>
+        <p class="hint">Ton courriel bifcoshop.com est sur <b>Google Workspace (Gmail)</b>. Serveur : <code>smtp.gmail.com</code>, port 465 (SSL). Comme mot de passe, utilise un <b>mot de passe d'application</b> Google (pas ton mot de passe habituel).</p>
+        <label>Serveur SMTP
+          <input id="smtp-host" placeholder="smtp.gmail.com" />
+        </label>
+        <div class="two">
+          <label>Port
+            <input id="smtp-port" type="number" placeholder="587" />
+          </label>
+          <label class="chk-inline"><input type="checkbox" id="smtp-secure" /> SSL (port 465)</label>
+        </div>
+        <label>Identifiant (ton adresse complète)
+          <input id="smtp-user" placeholder="partenaires@bifcoshop.com" />
+        </label>
+        <label>Mot de passe d'application Google (16 caractères)
+          <input id="smtp-pass" type="password" placeholder="mot de passe d'application Google" />
+        </label>
+        <hr />
+        <label>Nom d'expéditeur affiché
+          <input id="from-name" placeholder="Bifco — Partenariats" />
+        </label>
+        <label>Adresse d'envoi
+          <input id="from-email" placeholder="partenaires@bifcoshop.com" />
+        </label>
+        <label>Signature (ajoutée à la fin des courriels)
+          <textarea id="signature" rows="3" placeholder="Ton nom&#10;Bifco&#10;Téléphone · site web"></textarea>
+        </label>
+        <label>Adresse postale de l'entreprise (recommandé)
+          <input id="company" placeholder="Bifco, 123 rue …, Ville, QC" />
+        </label>
+        <label>Délai entre chaque envoi
+          <select id="send-delay">
+            <option value="2000">2 secondes</option>
+            <option value="4000" selected>4 secondes (recommandé)</option>
+            <option value="8000">8 secondes</option>
+            <option value="15000">15 secondes</option>
+          </select>
+        </label>
+        <hr />
+        <h2 style="font-size:16px">🌡️ Mode réchauffement</h2>
+        <p class="hint">Pour une adresse neuve : limite le nombre d'envois par jour et l'augmente automatiquement chaque semaine (10 → 20 → 30 → 40 → 50). Empêche que ton adresse soit classée pourriel.</p>
+        <label class="chk-inline" style="margin-top:0"><input type="checkbox" id="wu-enabled" /> Activer le réchauffement automatique</label>
+        <div id="wu-info" class="status"></div>
+        <label>Plafond maximal une fois réchauffé
+          <select id="wu-max">
+            <option value="30">30 courriels / jour</option>
+            <option value="50" selected>50 courriels / jour (recommandé)</option>
+            <option value="75">75 courriels / jour</option>
+            <option value="100">100 courriels / jour</option>
+          </select>
+        </label>
+        <div class="row-btns">
+          <button id="btn-save-settings" class="primary">Enregistrer</button>
+          <button id="btn-test-smtp" class="ghost">Tester la connexion</button>
+          <button id="btn-test-mail" class="ghost">✉️ Envoyer un courriel de test</button>
+        </div>
+        <p class="hint">Le courriel de test part vers ta propre adresse d'envoi et ne compte pas dans le réchauffement. Idéal pour vérifier que tout arrive en boîte de réception.</p>
+        <div id="settings-status" class="status"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

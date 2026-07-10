@@ -1,0 +1,16 @@
+{
+  "name": "app-courriels-garages",
+  "version": "1.0.0",
+  "description": "Outil de prospection : trouver des garages par zone et leur envoyer des courriels de partenariat.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "nodemailer": "^9.0.3"
+  }
+}
