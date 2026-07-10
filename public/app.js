@@ -464,6 +464,7 @@ $('#btn-send').addEventListener('click', async () => {
     } else {
       let msg = `✅ ${r.sent} envoyé(s)`;
       if (r.failed) msg += ` · ⚠️ ${r.failed} échec(s)`;
+      if (r.duplicatesSkipped) msg += ` · 🚫 ${r.duplicatesSkipped} ignoré(s) (a déjà reçu ce modèle)`;
       if (r.held) msg += ` · ⏸️ ${r.held} gardé(s) pour demain (plafond ${r.cap})`;
       setStatus('#send-status', msg, r.failed ? 'error' : 'done');
       toast(`${r.sent} courriel(s) envoyé(s)`, 'ok');

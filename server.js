@@ -722,14 +722,29 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
   const fromLine = settings.from.name
     ? `"${settings.from.name}" <${settings.from.email}>`
     : settings.from.email;
+
+  // ANTI-DOUBLON : jamais deux fois le MÊME modèle au même garage.
+  // On mémorise les couples (garage + modèle) déjà envoyés avec succès.
+  const alreadySent = new Set(
+    sends
+      .filter((s) => s.status === 'ok' && s.templateId === tpl.id && s.contactId)
+      .map((s) => s.contactId)
+  );
+
   const results = [];
+  let skippedDuplicate = 0;
   for (let i = 0; i < targets.length; i++) {
     const c = targets[i];
+    if (alreadySent.has(c.id)) {
+      skippedDuplicate++;
+      continue; // ce garage a déjà reçu ce modèle → on ne renvoie pas
+    }
     const subject = renderTemplate(tpl.subject, c);
     const text = buildEmailBody(renderTemplate(tpl.body, c), settings);
     const rec = {
       id: randomUUID(),
       contactId: c.id,
+      templateId: tpl.id, // pour reconnaître ce qui a déjà été envoyé
       to: c.email,
       name: c.name,
       zone: c.zone || c.city || '',
@@ -747,13 +762,14 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
       rec.status = 'erreur';
       rec.error = e.message;
     }
+    if (rec.status === 'ok') alreadySent.add(c.id); // évite un doublon dans le même lot
     results.push(rec);
     sends.push(rec);
     if (i < targets.length - 1 && settings.sendDelayMs > 0) {
       await sleep(Number(settings.sendDelayMs) || 0);
     }
   }
-  return results;
+  return { results, skippedDuplicate };
 }
 
 // ---------------------------------------------------------------------------
@@ -817,7 +833,8 @@ async function runAutoOnce(force = false) {
     const targets = contacts.filter(isNew).slice(0, Math.max(0, remaining));
     let results = [];
     if (targets.length) {
-      results = await deliverToContacts(settings, tpl, targets, sends, contacts);
+      const out = await deliverToContacts(settings, tpl, targets, sends, contacts);
+      results = out.results;
     }
     const ok = results.filter((r) => r.status === 'ok').length;
 
@@ -1234,13 +1251,14 @@ async function handleApi(req, res, url) {
       }
     }
 
-    const results = await deliverToContacts(settings, tpl, targets, sends, contacts);
+    const { results, skippedDuplicate } = await deliverToContacts(settings, tpl, targets, sends, contacts);
     await Promise.all([save('sends', sends), save('contacts', contacts)]);
     const ok = results.filter((r) => r.status === 'ok').length;
     return sendJSON(res, 200, {
       sent: ok,
       failed: results.length - ok,
       held,
+      duplicatesSkipped: skippedDuplicate,
       cap: wu.enabled ? wu.cap : null,
       usedToday: wu.usedToday + ok,
       results,
