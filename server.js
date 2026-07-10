@@ -262,12 +262,17 @@ async function overpassGarages(lat, lon, radiusKm, includeDealers = false) {
   const dealerLine = includeDealers
     ? `  nwr["shop"="car"](around:${R},${lat},${lon});\n`
     : '';
-  const q = `[out:json][timeout:60];
+  const q = `[out:json][timeout:90];
 (
   nwr["shop"="car_repair"](around:${R},${lat},${lon});
   nwr["craft"="car_repair"](around:${R},${lat},${lon});
   nwr["shop"="tyres"](around:${R},${lat},${lon});
-  nwr["service:vehicle:repairs"="yes"](around:${R},${lat},${lon});
+  nwr["shop"="motorcycle_repair"](around:${R},${lat},${lon});
+  nwr["shop"="car_parts"](around:${R},${lat},${lon});
+  nwr["service:vehicle:repairs"~"."](around:${R},${lat},${lon});
+  nwr["service:vehicle:car_repair"~"."](around:${R},${lat},${lon});
+  nwr["service:vehicle:tyres"~"."](around:${R},${lat},${lon});
+  nwr["craft"="agricultural_engines"](around:${R},${lat},${lon});
 ${dealerLine});
 out center tags;`;
   const endpoints = [
@@ -555,7 +560,7 @@ function warmupInfo(settings, sends) {
 // ---------------------------------------------------------------------------
 async function searchGarages(
   zone,
-  { radiusKm = 15, smallOnly = true, scrape = true, maxScrape = 40 } = {}
+  { radiusKm = 15, smallOnly = true, scrape = true, maxScrape = 200 } = {}
 ) {
   const geo = await geocode(zone.trim());
   const raw = await overpassGarages(geo.lat, geo.lon, Number(radiusKm) || 15, !smallOnly);
@@ -587,7 +592,7 @@ async function searchGarages(
           scraped++;
         }
       },
-      5
+      8
     );
   }
   return { zone: zone.trim(), center: geo, list, excludedBig, scraped };
@@ -969,7 +974,7 @@ async function handleApi(req, res, url) {
 
   // --- Recherche de garages ---
   if (p === '/api/search' && method === 'POST') {
-    const { zone, radiusKm = 15, scrape = true, maxScrape = 40, smallOnly = true } =
+    const { zone, radiusKm = 15, scrape = true, maxScrape = 200, smallOnly = true } =
       await readBody(req);
     if (!zone || !zone.trim()) return sendJSON(res, 400, { error: 'Zone requise' });
     try {
