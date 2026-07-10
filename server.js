@@ -358,7 +358,7 @@ function normalizeGarage(el) {
 
 // --- Extraction de courriels depuis les sites web -------------------------
 const EMAIL_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
-const JUNK_EMAIL = /(sentry|wixpress|example\.|@example|exemple\.|@domaine|votredomaine|votre-domaine|yourdomain|domain\.com|email\.com|no-?reply|\.png|\.jpg|\.jpeg|\.gif|\.webp|\.svg|@2x|@3x|@sentry)/i;
+const JUNK_EMAIL = /(sentry|wixpress|example\.|@example|exemple\.|@domaine|votredomaine|votre-domaine|yourdomain|domain\.com|email\.com|no-?reply|latofonts|fontawesome|@sentry|googleapis|gstatic|schema\.org|\.png|\.jpg|\.jpeg|\.gif|\.webp|\.svg|@2x|@3x)/i;
 
 function extractEmails(html, siteHost) {
   const found = new Set();
@@ -1068,7 +1068,7 @@ async function handleApi(req, res, url) {
       await readBody(req);
     if (!zone || !zone.trim()) return sendJSON(res, 400, { error: 'Zone requise' });
     try {
-      const { center, list, excludedBig, scraped } = await searchGarages(zone, {
+      const { center, list, excludedBig, scraped, source } = await searchGarages(zone, {
         radiusKm: Number(radiusKm) || 15,
         smallOnly,
         scrape,
@@ -1077,6 +1077,7 @@ async function handleApi(req, res, url) {
       return sendJSON(res, 200, {
         zone: zone.trim(),
         center,
+        source,
         total: list.length,
         withEmail: list.filter((g) => g.email).length,
         scrapedFound: scraped,
