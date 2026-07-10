@@ -522,6 +522,11 @@ async function loadAuto() {
   $('#auto-zones').value = (a.zones || []).join('\n');
   $('#auto-radius').value = String(a.radiusKm || 15);
   $('#auto-limit').value = String(a.dailyLimit || 20);
+  const hourSel = $('#auto-hour');
+  const hr = a.sendHour ?? 8;
+  hourSel.innerHTML = Array.from({ length: 24 }, (_, h) =>
+    `<option value="${h}" ${h === hr ? 'selected' : ''}>${String(h).padStart(2, '0')}h00</option>`
+  ).join('');
   $('#auto-small').checked = a.smallOnly !== false;
   renderAutoBanner(data);
   renderAutoLast(a.lastResult);
@@ -563,6 +568,7 @@ async function saveAuto() {
     zones,
     radiusKm: Number($('#auto-radius').value),
     dailyLimit: Number($('#auto-limit').value),
+    sendHour: Number($('#auto-hour').value),
     smallOnly: $('#auto-small').checked,
   });
 }
