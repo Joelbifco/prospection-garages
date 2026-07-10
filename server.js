@@ -558,13 +558,9 @@ function warmupInfo(settings, sends) {
 // ---------------------------------------------------------------------------
 //  Fonctions réutilisables : recherche, import, envoi
 // ---------------------------------------------------------------------------
-async function searchGarages(
-  zone,
-  { radiusKm = 15, smallOnly = true, scrape = true, maxScrape = 200 } = {}
-) {
-  const geo = await geocode(zone.trim());
-  const raw = await overpassGarages(geo.lat, geo.lon, Number(radiusKm) || 15, !smallOnly);
-  let list = raw.map(normalizeGarage);
+// Traitement commun : filtre (petits garages), dédoublonne, puis extrait les
+// courriels depuis les sites web. Utilisé par la recherche OSM ET Google.
+async function postProcessGarages(list, zoneStr, { smallOnly = true, scrape = true, maxScrape = 200 } = {}) {
   let excludedBig = 0;
   if (smallOnly) {
     const before = list.length;
@@ -578,7 +574,7 @@ async function searchGarages(
     seen.add(k);
     return true;
   });
-  list.forEach((g) => (g.zone = zone.trim()));
+  list.forEach((g) => (g.zone = zoneStr));
   let scraped = 0;
   if (scrape) {
     const targets = list.filter((g) => !g.email && g.website).slice(0, maxScrape);
@@ -595,7 +591,95 @@ async function searchGarages(
       8
     );
   }
-  return { zone: zone.trim(), center: geo, list, excludedBig, scraped };
+  return { list, excludedBig, scraped };
+}
+
+// Recherche via OpenStreetMap (gratuit, sans clé)
+async function searchGaragesOSM(zone, opts = {}) {
+  const geo = await geocode(zone.trim());
+  const raw = await overpassGarages(geo.lat, geo.lon, Number(opts.radiusKm) || 15, !(opts.smallOnly ?? true));
+  const list = raw.map(normalizeGarage);
+  const r = await postProcessGarages(list, zone.trim(), opts);
+  return { zone: zone.trim(), center: geo, ...r, source: 'OpenStreetMap' };
+}
+
+// Recherche via Google Places (plus complet — nécessite une clé Google)
+async function googlePlacesGarages(lat, lon, radiusKm, apiKey) {
+  const radius = Math.min(50000, Math.max(1000, Math.round((Number(radiusKm) || 15) * 1000)));
+  const url = 'https://places.googleapis.com/v1/places:searchText';
+  const fieldMask =
+    'places.displayName,places.websiteUri,places.formattedAddress,places.nationalPhoneNumber,' +
+    'places.internationalPhoneNumber,places.location,places.addressComponents,nextPageToken';
+  const queries = ['garage réparation automobile', 'mécanique automobile', 'garage de pneus'];
+  const byKey = new Map();
+  for (const q of queries) {
+    let pageToken;
+    for (let page = 0; page < 3; page++) {
+      const body = {
+        textQuery: q,
+        includedType: 'car_repair',
+        languageCode: 'fr',
+        regionCode: 'CA',
+        pageSize: 20,
+        locationBias: { circle: { center: { latitude: lat, longitude: lon }, radius } },
+      };
+      if (pageToken) body.pageToken = pageToken;
+      const r = await fetchWithTimeout(
+        url,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': apiKey,
+            'X-Goog-FieldMask': fieldMask,
+          },
+          body: JSON.stringify(body),
+        },
+        20000
+      );
+      if (!r.ok) {
+        const t = await r.text().catch(() => '');
+        throw new Error('Google Places ' + r.status + (t ? ' — ' + t.slice(0, 250) : ''));
+      }
+      const j = await r.json();
+      for (const pl of j.places || []) {
+        const key = (pl.websiteUri || '') + '|' + (pl.displayName?.text || '') + '|' + (pl.formattedAddress || '');
+        if (!byKey.has(key)) byKey.set(key, pl);
+      }
+      pageToken = j.nextPageToken;
+      if (!pageToken) break;
+      await sleep(1500); // court délai avant d'utiliser la page suivante
+    }
+  }
+  return [...byKey.values()].map((pl) => {
+    const comps = pl.addressComponents || [];
+    const city = (comps.find((c) => (c.types || []).includes('locality')) || {}).longText || '';
+    return {
+      name: pl.displayName?.text || 'Garage',
+      email: '',
+      website: pl.websiteUri || '',
+      phone: pl.nationalPhoneNumber || pl.internationalPhoneNumber || '',
+      city,
+      address: pl.formattedAddress || '',
+      lat: pl.location?.latitude,
+      lon: pl.location?.longitude,
+    };
+  });
+}
+
+async function searchGaragesGoogle(zone, opts = {}, apiKey) {
+  const geo = await geocode(zone.trim());
+  const raw = await googlePlacesGarages(geo.lat, geo.lon, Number(opts.radiusKm) || 15, apiKey);
+  const r = await postProcessGarages(raw, zone.trim(), opts);
+  return { zone: zone.trim(), center: geo, ...r, source: 'Google' };
+}
+
+// Aiguilleur : Google si une clé est configurée, sinon OpenStreetMap
+async function searchGarages(zone, opts = {}) {
+  const settings = await load('settings');
+  const key = settings.googleApiKey && String(settings.googleApiKey).trim();
+  if (key) return searchGaragesGoogle(zone, opts, key);
+  return searchGaragesOSM(zone, opts);
 }
 
 // Ajoute des garages à la liste de contacts (dédoublonnage par courriel). Mute `contacts`.
@@ -855,6 +939,7 @@ async function handleApi(req, res, url) {
       sends: sends.length,
       syncMode: SYNC_MODE,
       dataDir: DATA_DIR,
+      googleActive: !!(settings.googleApiKey && String(settings.googleApiKey).trim()),
     });
   }
 
@@ -863,6 +948,7 @@ async function handleApi(req, res, url) {
     const s = await load('settings');
     const masked = structuredClone(s);
     masked.smtp.pass = s.smtp.pass ? '********' : '';
+    masked.googleApiKey = s.googleApiKey ? '********' : '';
     return sendJSON(res, 200, masked);
   }
   if (p === '/api/settings' && method === 'POST') {
@@ -879,6 +965,10 @@ async function handleApi(req, res, url) {
     // Ne pas écraser le mot de passe si l'utilisateur laisse le masque
     if (body.smtp && (body.smtp.pass === '********' || body.smtp.pass === undefined)) {
       next.smtp.pass = cur.smtp.pass;
+    }
+    // Idem pour la clé Google (masque = on garde l'existante)
+    if (body.googleApiKey === '********' || body.googleApiKey === undefined) {
+      next.googleApiKey = cur.googleApiKey || '';
     }
     // Au moment où l'on active le réchauffement, on fixe le jour de départ
     if (next.warmup.enabled && !next.warmup.startDate) {

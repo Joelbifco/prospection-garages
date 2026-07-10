@@ -98,7 +98,8 @@ async function doSearch() {
     searchResults = data.results;
     setStatus(
       '#search-status',
-      `${data.total} garages trouvés · ${data.withEmail} avec courriel` +
+      (data.source === 'Google' ? '🔑 Google Maps · ' : '🗺️ OpenStreetMap (gratuit) · ') +
+        `${data.total} garages trouvés · ${data.withEmail} avec courriel` +
         (scrape ? ` · ${data.scrapedFound} courriels trouvés sur les sites` : '') +
         (data.excludedBig ? ` · ${data.excludedBig} concessionnaires/chaînes exclus` : ''),
       'done'
@@ -607,6 +608,15 @@ async function loadSettings() {
   $('#signature').value = s.signature || '';
   $('#company').value = s.company || '';
   $('#send-delay').value = s.sendDelayMs || 4000;
+  $('#google-key').value = s.googleApiKey || '';
+  const gs = $('#google-status');
+  if (s.googleApiKey) {
+    gs.className = 'status done';
+    gs.textContent = '✅ Clé enregistrée — la recherche utilise Google Maps (résultats élargis).';
+  } else {
+    gs.className = 'status';
+    gs.textContent = 'Aucune clé — recherche gratuite (OpenStreetMap).';
+  }
   const w = s.warmup || {};
   $('#wu-enabled').checked = !!w.enabled;
   $('#wu-max').value = String(w.maxPerDay || 50);
@@ -645,6 +655,7 @@ async function saveSettings() {
     company: $('#company').value.trim(),
     sendDelayMs: Number($('#send-delay').value),
     warmup: { enabled: $('#wu-enabled').checked, maxPerDay: Number($('#wu-max').value) },
+    googleApiKey: $('#google-key').value.trim(),
   };
   await api('/settings', 'POST', body);
   refreshBadge();

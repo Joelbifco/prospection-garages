@@ -295,6 +295,13 @@
           </select>
         </label>
         <hr />
+        <h2 style="font-size:16px">🔑 Recherche avancée (Google Maps)</h2>
+        <p class="hint">Colle ta <b>clé Google</b> pour trouver <b>beaucoup plus</b> de garages avec courriel (liste complète de Google au lieu de l'annuaire gratuit). Laisse vide pour rester sur la recherche gratuite.</p>
+        <label>Clé Google (API Places)
+          <input id="google-key" type="password" placeholder="Colle ta clé Google ici" />
+        </label>
+        <div id="google-status" class="status"></div>
+        <hr />
         <h2 style="font-size:16px">🌡️ Mode réchauffement</h2>
         <p class="hint">Pour une adresse neuve : limite le nombre d'envois par jour et l'augmente automatiquement chaque semaine (10 → 20 → 30 → 40 → 50). Empêche que ton adresse soit classée pourriel.</p>
         <label class="chk-inline" style="margin-top:0"><input type="checkbox" id="wu-enabled" /> Activer le réchauffement automatique</label>
