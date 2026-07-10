@@ -125,6 +125,7 @@ const DEFAULTS = {
       scrape: true,
       dailyLimit: 20,
       sendHour: 8, // heure locale à laquelle l'envoi quotidien démarre
+      weekdaysOnly: true, // n'envoyer que du lundi au vendredi
       lastRunDate: null,
       lastResult: null,
     },
@@ -768,6 +769,11 @@ async function runAutoOnce(force = false) {
   // Attendre l'heure choisie (ex. 8h), sauf en lancement manuel
   const sendHour = Number(auto.sendHour ?? 8);
   if (!force && new Date().getHours() < sendHour) return { skipped: 'before-hour' };
+  // Ne pas envoyer la fin de semaine (samedi=6, dimanche=0), sauf en lancement manuel
+  const dow = new Date().getDay();
+  if (!force && (auto.weekdaysOnly ?? true) && (dow === 0 || dow === 6)) {
+    return { skipped: 'weekend' };
+  }
 
   const templates = await load('templates');
   const tpl = templates.find((t) => t.id === auto.templateId) || templates[0];
@@ -1017,6 +1023,7 @@ async function handleApi(req, res, url) {
       scrape: body.scrape ?? cur.scrape ?? true,
       dailyLimit: body.dailyLimit ?? cur.dailyLimit ?? 20,
       sendHour: body.sendHour ?? cur.sendHour ?? 8,
+      weekdaysOnly: body.weekdaysOnly ?? cur.weekdaysOnly ?? true,
     };
     await save('settings', settings);
     return sendJSON(res, 200, { ok: true });

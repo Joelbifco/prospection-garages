@@ -528,6 +528,7 @@ async function loadAuto() {
     `<option value="${h}" ${h === hr ? 'selected' : ''}>${String(h).padStart(2, '0')}h00</option>`
   ).join('');
   $('#auto-small').checked = a.smallOnly !== false;
+  $('#auto-weekdays').checked = a.weekdaysOnly !== false;
   renderAutoBanner(data);
   renderAutoLast(a.lastResult);
 }
@@ -570,6 +571,7 @@ async function saveAuto() {
     dailyLimit: Number($('#auto-limit').value),
     sendHour: Number($('#auto-hour').value),
     smallOnly: $('#auto-small').checked,
+    weekdaysOnly: $('#auto-weekdays').checked,
   });
 }
 
