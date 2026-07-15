@@ -126,6 +126,7 @@ const DEFAULTS = {
       dailyLimit: 20,
       sendHour: 8, // heure locale à laquelle l'envoi quotidien démarre
       weekdaysOnly: true, // n'envoyer que du lundi au vendredi
+      accumulateZonesPerDay: 4, // nb de zones ratissées chaque jour pour accumuler
       lastRunDate: null,
       lastResult: null,
     },
@@ -813,11 +814,10 @@ async function runAutoOnce(force = false) {
   // Attendre l'heure choisie (ex. 8h), sauf en lancement manuel
   const sendHour = Number(auto.sendHour ?? 8);
   if (!force && new Date().getHours() < sendHour) return { skipped: 'before-hour' };
-  // Ne pas envoyer la fin de semaine (samedi=6, dimanche=0), sauf en lancement manuel
+  // Fin de semaine (samedi=6, dimanche=0) : on continue d'ACCUMULER des courriels,
+  // mais on n'ENVOIE pas (sauf lancement manuel).
   const dow = new Date().getDay();
-  if (!force && (auto.weekdaysOnly ?? true) && (dow === 0 || dow === 6)) {
-    return { skipped: 'weekend' };
-  }
+  const noSendToday = !force && (auto.weekdaysOnly ?? true) && (dow === 0 || dow === 6);
 
   const templates = await load('templates');
   const tpl = templates.find((t) => t.id === auto.templateId) || templates[0];
@@ -828,36 +828,49 @@ async function runAutoOnce(force = false) {
     let contacts = await load('contacts');
     const sends = await load('sends');
     const wu = warmupInfo(settings, sends);
-    const remaining = wu.enabled
+    const sendQuota = noSendToday
+      ? 0
+      : wu.enabled
       ? wu.remaining
       : Math.max(0, (Number(auto.dailyLimit) || 20) - countSentToday(sends));
 
-    // Trouve de nouveaux garages si pas assez de « nouveaux » contacts pour remplir le quota
-    const searched = [];
     const isNew = (c) => c.email && c.status === 'nouveau';
     const zones = Array.isArray(auto.zones) ? auto.zones.filter((z) => z && z.trim()) : [];
-    if (remaining > 0 && zones.length) {
+
+    // ACCUMULATION : chaque jour, on ratisse PLUSIEURS zones et on garde TOUS les
+    // courriels trouvés (pour bâtir une grande réserve), en s'arrêtant proprement
+    // si Google atteint sa limite quotidienne.
+    const searched = [];
+    let totalAdded = 0;
+    let quotaHit = false;
+    if (zones.length) {
+      const perDay = Math.max(1, Math.min(zones.length, Number(auto.accumulateZonesPerDay ?? 4)));
       let zi = auto.zoneIndex || 0;
-      let loops = 0;
-      while (contacts.filter(isNew).length < remaining && loops < zones.length) {
+      for (let k = 0; k < perDay; k++) {
         const zone = zones[zi % zones.length];
         zi++;
-        loops++;
         try {
           const { list } = await searchGarages(zone, {
-            radiusKm: auto.radiusKm || 15,
+            radiusKm: auto.radiusKm || 25,
             smallOnly: auto.smallOnly !== false,
             scrape: auto.scrape !== false,
           });
           const r = importItems(list.filter((g) => g.email), contacts);
+          totalAdded += r.added;
           searched.push(`${zone} (+${r.added})`);
         } catch (e) {
+          if (/quotidienne|429|RESOURCE_EXHAUSTED/i.test(e.message)) {
+            quotaHit = true;
+            searched.push(`${zone} (limite Google — reprend demain)`);
+            break;
+          }
           searched.push(`${zone} (erreur)`);
         }
       }
       settings.auto.zoneIndex = zi % zones.length;
     }
 
+    const remaining = sendQuota;
     const targets = contacts.filter(isNew).slice(0, Math.max(0, remaining));
     let results = [];
     if (targets.length) {
@@ -872,14 +885,16 @@ async function runAutoOnce(force = false) {
       at: new Date().toISOString(),
       sent: ok,
       failed: results.length - ok,
+      added: totalAdded,
       zonesSearched: searched,
       template: tpl.name,
-      note:
-        remaining <= 0
-          ? 'Quota du jour déjà atteint'
-          : targets.length
-          ? ''
-          : 'Aucun nouveau contact à joindre (ajoute des zones)',
+      note: [
+        `+${totalAdded} garages ajoutés à la réserve`,
+        noSendToday ? 'week-end : accumulation seulement, pas d\'envoi' : '',
+        quotaHit ? 'limite Google atteinte (reprend demain)' : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
     };
     await save('sends', sends);
     await save('contacts', contacts);
@@ -1069,6 +1084,7 @@ async function handleApi(req, res, url) {
       dailyLimit: body.dailyLimit ?? cur.dailyLimit ?? 20,
       sendHour: body.sendHour ?? cur.sendHour ?? 8,
       weekdaysOnly: body.weekdaysOnly ?? cur.weekdaysOnly ?? true,
+      accumulateZonesPerDay: body.accumulateZonesPerDay ?? cur.accumulateZonesPerDay ?? 4,
     };
     await save('settings', settings);
     return sendJSON(res, 200, { ok: true });
