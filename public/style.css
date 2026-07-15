@@ -30,6 +30,7 @@ header {
 }
 .brand { display: flex; align-items: center; gap: 14px; }
 .logo { font-size: 30px; }
+.logo-img { height: 42px; width: auto; display: block; }
 header h1 { margin: 0; font-size: 20px; }
 .tag { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
 
