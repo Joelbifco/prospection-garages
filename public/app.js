@@ -42,6 +42,7 @@ $$('#tabs button').forEach((b) =>
     if (b.dataset.tab === 'entonnoir') loadEntonnoir();
     if (b.dataset.tab === 'courriels') loadTemplates();
     if (b.dataset.tab === 'envoi') initSend();
+    if (b.dataset.tab === 'reponses') loadReplies();
     if (b.dataset.tab === 'stats') loadStats();
     if (b.dataset.tab === 'auto') loadAuto();
     if (b.dataset.tab === 'reglages') loadSettings();
@@ -479,6 +480,74 @@ $('#btn-send').addEventListener('click', async () => {
     $('#btn-send').disabled = false;
   }
 });
+
+// ================= RÉPONSES =================
+$('#btn-check-replies').addEventListener('click', async () => {
+  $('#btn-check-replies').disabled = true;
+  setStatus('#replies-status', '<span class="spinner"></span>Lecture de ta boîte Gmail…', 'working');
+  try {
+    const r = await api('/replies/check', 'POST');
+    if (r.error) throw new Error(r.error);
+    setStatus(
+      '#replies-status',
+      r.new > 0 ? `✅ ${r.new} nouvelle(s) réponse(s) !` : '✅ Aucune nouvelle réponse pour l\'instant.',
+      'done'
+    );
+    loadReplies();
+  } catch (e) {
+    setStatus('#replies-status', '⚠️ ' + e.message, 'error');
+  } finally {
+    $('#btn-check-replies').disabled = false;
+  }
+});
+
+async function loadReplies() {
+  const replies = await api('/replies');
+  const box = $('#replies-list');
+  if (!replies.length) {
+    box.innerHTML =
+      '<p style="color:var(--muted);margin-top:16px">Aucune réponse pour le moment. Clique « Vérifier les réponses » pour lire ta boîte Gmail.</p>';
+    return;
+  }
+  box.innerHTML = replies
+    .map(
+      (r) => `
+    <div class="reply-card" data-id="${esc(r.contactId)}">
+      <div class="rc-head">
+        <div><span class="rc-name">${esc(r.name) || esc(r.from)}</span> <span class="rc-from">&lt;${esc(r.from)}&gt;</span></div>
+        <span class="rc-date">${new Date(r.date).toLocaleString('fr-CA', { dateStyle: 'medium', timeStyle: 'short' })}</span>
+      </div>
+      ${r.subject ? `<div class="rc-subject">${esc(r.subject)}</div>` : ''}
+      <div class="rc-text">${esc(r.text) || '(message sans texte)'}</div>
+      <textarea class="rc-reply" rows="4" placeholder="Écris ta réponse à ${esc(r.name) || 'ce garage'}…"></textarea>
+      <div class="rc-actions">
+        <button class="primary rc-send" data-id="${esc(r.contactId)}">📧 Répondre</button>
+        <span class="rc-sent" style="color:var(--ok);font-size:13px"></span>
+      </div>
+    </div>`
+    )
+    .join('');
+
+  $$('.rc-send').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      const card = btn.closest('.reply-card');
+      const body = card.querySelector('.rc-reply').value.trim();
+      if (!body) return toast('Écris un message', 'err');
+      btn.disabled = true;
+      try {
+        const r = await api('/reply/send', 'POST', { contactId: btn.dataset.id, body });
+        if (r.error) throw new Error(r.error);
+        card.querySelector('.rc-reply').value = '';
+        card.querySelector('.rc-sent').textContent = '✅ Réponse envoyée';
+        toast('Réponse envoyée', 'ok');
+      } catch (e) {
+        toast('Erreur : ' + e.message, 'err');
+      } finally {
+        btn.disabled = false;
+      }
+    })
+  );
+}
 
 // ================= STATS =================
 async function loadStats() {

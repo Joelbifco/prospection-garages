@@ -30,6 +30,7 @@
     <button data-tab="entonnoir">🎯 Entonnoir</button>
     <button data-tab="courriels">✉️ Courriels</button>
     <button data-tab="envoi">📤 Envoi</button>
+    <button data-tab="reponses">💬 Réponses</button>
     <button data-tab="stats">📊 Stats</button>
     <button data-tab="auto">🤖 Auto</button>
     <button data-tab="reglages">⚙️ Réglages</button>
@@ -183,6 +184,19 @@
             <tbody></tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <!-- ============ RÉPONSES ============ -->
+    <section id="tab-reponses" class="tab">
+      <div class="card">
+        <div class="results-head">
+          <h2>💬 Réponses des garages</h2>
+          <button id="btn-check-replies" class="primary">🔄 Vérifier les réponses</button>
+        </div>
+        <p class="hint">L'app lit ta boîte Gmail et repère les garages qui t'ont répondu. Clique « Vérifier » (ça se fait aussi tout seul de temps en temps). Tu peux répondre directement ci-dessous.</p>
+        <div id="replies-status" class="status"></div>
+        <div id="replies-list"></div>
       </div>
     </section>
 

@@ -183,6 +183,17 @@ a:hover { text-decoration: underline; }
 #funnel-table td.num, #funnel-table th.num { text-align: center; }
 #funnel-table td.zero { color: var(--muted); }
 
+/* ===== Réponses ===== */
+.reply-card { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-top: 14px; }
+.reply-card .rc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.reply-card .rc-name { font-weight: 700; font-size: 15px; }
+.reply-card .rc-from { color: var(--muted); font-size: 13px; }
+.reply-card .rc-date { color: var(--muted); font-size: 12px; }
+.reply-card .rc-subject { font-size: 13px; color: var(--accent); margin-bottom: 6px; }
+.reply-card .rc-text { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-size: 14px; max-height: 220px; overflow: auto; }
+.reply-card textarea { margin-top: 10px; }
+.reply-card .rc-actions { display: flex; gap: 10px; margin-top: 8px; align-items: center; }
+
 .two { display: flex; gap: 12px; align-items: center; }
 .two > label { flex: 1; }
 .chk-inline { margin-top: 26px; }

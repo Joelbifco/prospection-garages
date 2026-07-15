@@ -12,6 +12,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
 import nodemailer from 'nodemailer';
+import { ImapFlow } from 'imapflow';
+import { simpleParser } from 'mailparser';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -105,11 +107,13 @@ const FILES = {
   contacts: path.join(DATA_DIR, 'contacts.json'),
   templates: path.join(DATA_DIR, 'templates.json'),
   sends: path.join(DATA_DIR, 'sends.json'),
+  replies: path.join(DATA_DIR, 'replies.json'),
 };
 
 const DEFAULTS = {
   settings: {
     smtp: { host: 'smtp.gmail.com', port: 465, secure: true, user: 'partenaires@bifcoshop.com', pass: '' },
+    imap: { host: 'imap.gmail.com', port: 993 },
     from: { name: 'Bifco — Partenariats', email: 'partenaires@bifcoshop.com' },
     sendDelayMs: 4000,
     signature: '',
@@ -135,6 +139,7 @@ const DEFAULTS = {
   contacts: [],
   templates: [],
   sends: [],
+  replies: [],
 };
 
 async function ensureData() {
@@ -968,6 +973,123 @@ function buildFunnel(contacts, sends) {
 }
 
 // ---------------------------------------------------------------------------
+//  Réponses : lire la boîte Gmail (IMAP) et repérer les garages qui ont répondu
+// ---------------------------------------------------------------------------
+async function checkReplies() {
+  const settings = await load('settings');
+  const user = settings.smtp?.user;
+  const pass = settings.smtp?.pass;
+  if (!user || !pass) throw new Error('Compte Gmail non configuré (voir Réglages)');
+  const host = settings.imap?.host || 'imap.gmail.com';
+  const port = Number(settings.imap?.port) || 993;
+
+  const client = new ImapFlow({ host, port, secure: true, auth: { user, pass }, logger: false });
+  const [contacts, replies] = await Promise.all([load('contacts'), load('replies')]);
+  const byEmail = new Map(contacts.filter((c) => c.email).map((c) => [c.email.toLowerCase(), c]));
+  const seen = new Set(replies.map((r) => r.messageId).filter(Boolean));
+  const matches = [];
+
+  await client.connect();
+  try {
+    const lock = await client.getMailboxLock('INBOX');
+    try {
+      const since = new Date(Date.now() - 90 * 86400000); // 90 derniers jours
+      let uids = [];
+      try {
+        uids = await client.search({ since }, { uid: true });
+      } catch {
+        uids = [];
+      }
+      if (uids && uids.length) {
+        for await (const msg of client.fetch(uids, { envelope: true }, { uid: true })) {
+          const env = msg.envelope || {};
+          const fromAddr = ((env.from && env.from[0] && env.from[0].address) || '').toLowerCase();
+          const contact = byEmail.get(fromAddr);
+          const messageId = env.messageId || 'uid-' + msg.uid;
+          if (contact && !seen.has(messageId)) {
+            seen.add(messageId);
+            matches.push({ uid: msg.uid, env, contact, messageId, fromAddr });
+          }
+        }
+      }
+      for (const m of matches) {
+        let text = '';
+        try {
+          const full = await client.fetchOne(m.uid, { source: true }, { uid: true });
+          const parsed = await simpleParser(full.source);
+          text = (parsed.text || '').trim().slice(0, 4000);
+        } catch {
+          /* pas de texte lisible */
+        }
+        replies.push({
+          id: randomUUID(),
+          contactId: m.contact.id,
+          from: m.fromAddr,
+          name: m.contact.name || '',
+          subject: (m.env.subject || '').slice(0, 200),
+          date: m.env.date ? new Date(m.env.date).toISOString() : new Date().toISOString(),
+          text,
+          messageId: m.messageId,
+        });
+        const idx = contacts.findIndex((c) => c.id === m.contact.id);
+        if (idx >= 0 && contacts[idx].status !== 'partenaire') contacts[idx].status = 'répondu';
+      }
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout().catch(() => {});
+  }
+  await Promise.all([save('replies', replies), save('contacts', contacts)]);
+  return { new: matches.length, total: replies.length };
+}
+
+// Répondre à un garage (envoi SMTP dans le même fil, hors plafond de réchauffement)
+async function sendReplyTo(contactId, body) {
+  const [settings, contacts, replies, sends] = await Promise.all([
+    load('settings'),
+    load('contacts'),
+    load('replies'),
+    load('sends'),
+  ]);
+  const contact = contacts.find((c) => c.id === contactId);
+  if (!contact || !contact.email) throw new Error('Contact introuvable');
+  const transport = makeTransport(settings);
+  const fromLine = settings.from.name
+    ? `"${settings.from.name}" <${settings.from.email}>`
+    : settings.from.email;
+  const last = replies
+    .filter((r) => r.contactId === contactId)
+    .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+  let subject = last?.subject || 'Votre message';
+  if (!/^\s*re\s*:/i.test(subject)) subject = 'Re : ' + subject;
+  const sig = settings.signature ? '\n\n' + settings.signature : '';
+  const info = await transport.sendMail({
+    from: fromLine,
+    to: contact.email,
+    subject,
+    text: body + sig,
+    inReplyTo: last?.messageId || undefined,
+    references: last?.messageId || undefined,
+  });
+  sends.push({
+    id: randomUUID(),
+    contactId,
+    to: contact.email,
+    name: contact.name,
+    zone: contact.zone || contact.city || '',
+    subject,
+    status: 'ok',
+    error: '',
+    at: new Date().toISOString(),
+    messageId: info.messageId || '',
+    isReply: true,
+  });
+  await save('sends', sends);
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 //  Routes API
 // ---------------------------------------------------------------------------
 async function handleApi(req, res, url) {
@@ -1322,6 +1444,32 @@ async function handleApi(req, res, url) {
   if (p === '/api/sends' && method === 'GET') {
     const sends = await load('sends');
     return sendJSON(res, 200, sends.slice(-500).reverse());
+  }
+
+  // --- Réponses reçues ---
+  if (p === '/api/replies/check' && method === 'POST') {
+    try {
+      const r = await checkReplies();
+      return sendJSON(res, 200, r);
+    } catch (e) {
+      return sendJSON(res, 200, { error: e.message });
+    }
+  }
+  if (p === '/api/replies' && method === 'GET') {
+    const replies = await load('replies');
+    const sorted = replies.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+    return sendJSON(res, 200, sorted);
+  }
+  if (p === '/api/reply/send' && method === 'POST') {
+    const { contactId, body } = await readBody(req);
+    if (!contactId || !body || !String(body).trim())
+      return sendJSON(res, 400, { error: 'Message vide' });
+    try {
+      const r = await sendReplyTo(contactId, body);
+      return sendJSON(res, 200, r);
+    } catch (e) {
+      return sendJSON(res, 200, { error: e.message });
+    }
   }
 
   // --- Statistiques ---
