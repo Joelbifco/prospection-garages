@@ -127,6 +127,7 @@ const DEFAULTS = {
       sendHour: 8, // heure locale à laquelle l'envoi quotidien démarre
       weekdaysOnly: true, // n'envoyer que du lundi au vendredi
       accumulateZonesPerDay: 4, // nb de zones ratissées chaque jour pour accumuler
+      findOnly: false, // true = trouver/accumuler seulement, sans envoyer automatiquement
       lastRunDate: null,
       lastResult: null,
     },
@@ -828,11 +829,12 @@ async function runAutoOnce(force = false) {
     let contacts = await load('contacts');
     const sends = await load('sends');
     const wu = warmupInfo(settings, sends);
-    const sendQuota = noSendToday
-      ? 0
-      : wu.enabled
-      ? wu.remaining
-      : Math.max(0, (Number(auto.dailyLimit) || 20) - countSentToday(sends));
+    const sendQuota =
+      noSendToday || auto.findOnly
+        ? 0
+        : wu.enabled
+        ? wu.remaining
+        : Math.max(0, (Number(auto.dailyLimit) || 20) - countSentToday(sends));
 
     const isNew = (c) => c.email && c.status === 'nouveau';
     const zones = Array.isArray(auto.zones) ? auto.zones.filter((z) => z && z.trim()) : [];
@@ -890,7 +892,8 @@ async function runAutoOnce(force = false) {
       template: tpl.name,
       note: [
         `+${totalAdded} garages ajoutés à la réserve`,
-        noSendToday ? 'week-end : accumulation seulement, pas d\'envoi' : '',
+        auto.findOnly ? 'mode « trouver seulement » (aucun envoi auto)' : '',
+        !auto.findOnly && noSendToday ? 'week-end : pas d\'envoi' : '',
         quotaHit ? 'limite Google atteinte (reprend demain)' : '',
       ]
         .filter(Boolean)
@@ -1085,6 +1088,7 @@ async function handleApi(req, res, url) {
       sendHour: body.sendHour ?? cur.sendHour ?? 8,
       weekdaysOnly: body.weekdaysOnly ?? cur.weekdaysOnly ?? true,
       accumulateZonesPerDay: body.accumulateZonesPerDay ?? cur.accumulateZonesPerDay ?? 4,
+      findOnly: body.findOnly ?? cur.findOnly ?? false,
     };
     await save('settings', settings);
     return sendJSON(res, 200, { ok: true });

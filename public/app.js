@@ -530,6 +530,7 @@ async function loadAuto() {
   ).join('');
   $('#auto-small').checked = a.smallOnly !== false;
   $('#auto-weekdays').checked = a.weekdaysOnly !== false;
+  $('#auto-findonly').checked = !!a.findOnly;
   renderAutoBanner(data);
   renderAutoLast(a.lastResult);
 }
@@ -573,6 +574,7 @@ async function saveAuto() {
     sendHour: Number($('#auto-hour').value),
     smallOnly: $('#auto-small').checked,
     weekdaysOnly: $('#auto-weekdays').checked,
+    findOnly: $('#auto-findonly').checked,
   });
 }
 
