@@ -612,13 +612,7 @@ async function googlePlacesGarages(lat, lon, radiusKm, apiKey) {
   const fieldMask =
     'places.displayName,places.websiteUri,places.formattedAddress,places.nationalPhoneNumber,' +
     'places.internationalPhoneNumber,places.location,places.addressComponents,nextPageToken';
-  const queries = [
-    'garage réparation automobile',
-    'mécanique automobile',
-    'atelier mécanique',
-    'garage de pneus',
-    'centre de service automobile',
-  ];
+  const queries = ['garage réparation automobile', 'mécanique automobile', 'atelier mécanique'];
 
   // Quadrillage : une seule requête plafonne à ~60 résultats. En interrogeant
   // plusieurs points (centre + couronne), on couvre toute la zone et on trouve
@@ -626,7 +620,7 @@ async function googlePlacesGarages(lat, lon, radiusKm, apiKey) {
   const points = [{ lat, lon }];
   let subRadius = Math.round(rKm * 1000);
   if (rKm > 8) {
-    const n = rKm > 20 ? 6 : 4;
+    const n = rKm > 20 ? 5 : 3;
     const ringKm = rKm * 0.6;
     subRadius = Math.round(rKm * 0.55 * 1000);
     for (let i = 0; i < n; i++) {
@@ -642,7 +636,7 @@ async function googlePlacesGarages(lat, lon, radiusKm, apiKey) {
   for (const pt of points) {
     for (const q of queries) {
       let pageToken;
-      for (let page = 0; page < 2; page++) {
+      for (let page = 0; page < 1; page++) {
         const body = {
           textQuery: q,
           includedType: 'car_repair',
@@ -667,6 +661,12 @@ async function googlePlacesGarages(lat, lon, radiusKm, apiKey) {
         );
         if (!r.ok) {
           const t = await r.text().catch(() => '');
+          // Limite quotidienne Google atteinte → message clair
+          if (r.status === 429) {
+            throw new Error(
+              'Limite quotidienne Google atteinte. La recherche Google repart demain (les quotas se réinitialisent chaque nuit). En attendant, tu peux décocher la clé pour utiliser la recherche gratuite.'
+            );
+          }
           // Problème de clé/config → on arrête net et on prévient
           if (r.status === 400 || r.status === 401 || r.status === 403) {
             throw new Error('Google Places ' + r.status + (t ? ' — ' + t.slice(0, 250) : ''));
@@ -678,9 +678,6 @@ async function googlePlacesGarages(lat, lon, radiusKm, apiKey) {
           const key = (pl.websiteUri || '') + '|' + (pl.displayName?.text || '') + '|' + (pl.formattedAddress || '');
           if (!byKey.has(key)) byKey.set(key, pl);
         }
-        pageToken = j.nextPageToken;
-        if (!pageToken) break;
-        await sleep(1200);
       }
     }
   }
