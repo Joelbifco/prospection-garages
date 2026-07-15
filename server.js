@@ -1556,3 +1556,15 @@ setTimeout(() => {
 setInterval(() => {
   runAutoOnce().catch(() => {});
 }, 15 * 60 * 1000);
+
+// Vérifie automatiquement les réponses reçues (au démarrage puis toutes les 30 min)
+setTimeout(() => {
+  checkReplies()
+    .then((r) => {
+      if (r && r.new > 0) console.log('  💬  Réponses : ' + r.new + ' nouvelle(s)');
+    })
+    .catch(() => {});
+}, 30000);
+setInterval(() => {
+  checkReplies().catch(() => {});
+}, 30 * 60 * 1000);
