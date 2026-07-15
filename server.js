@@ -607,50 +607,81 @@ async function searchGaragesOSM(zone, opts = {}) {
 
 // Recherche via Google Places (plus complet — nécessite une clé Google)
 async function googlePlacesGarages(lat, lon, radiusKm, apiKey) {
-  const radius = Math.min(50000, Math.max(1000, Math.round((Number(radiusKm) || 15) * 1000)));
+  const rKm = Number(radiusKm) || 15;
   const url = 'https://places.googleapis.com/v1/places:searchText';
   const fieldMask =
     'places.displayName,places.websiteUri,places.formattedAddress,places.nationalPhoneNumber,' +
     'places.internationalPhoneNumber,places.location,places.addressComponents,nextPageToken';
-  const queries = ['garage réparation automobile', 'mécanique automobile', 'garage de pneus'];
+  const queries = [
+    'garage réparation automobile',
+    'mécanique automobile',
+    'atelier mécanique',
+    'garage de pneus',
+    'centre de service automobile',
+  ];
+
+  // Quadrillage : une seule requête plafonne à ~60 résultats. En interrogeant
+  // plusieurs points (centre + couronne), on couvre toute la zone et on trouve
+  // beaucoup plus de garages.
+  const points = [{ lat, lon }];
+  let subRadius = Math.round(rKm * 1000);
+  if (rKm > 8) {
+    const n = rKm > 20 ? 6 : 4;
+    const ringKm = rKm * 0.6;
+    subRadius = Math.round(rKm * 0.55 * 1000);
+    for (let i = 0; i < n; i++) {
+      const ang = (2 * Math.PI * i) / n;
+      const dLat = (ringKm / 111) * Math.cos(ang);
+      const dLon = (ringKm / (111 * Math.cos((lat * Math.PI) / 180))) * Math.sin(ang);
+      points.push({ lat: lat + dLat, lon: lon + dLon });
+    }
+  }
+  subRadius = Math.min(50000, Math.max(1500, subRadius));
+
   const byKey = new Map();
-  for (const q of queries) {
-    let pageToken;
-    for (let page = 0; page < 3; page++) {
-      const body = {
-        textQuery: q,
-        includedType: 'car_repair',
-        languageCode: 'fr',
-        regionCode: 'CA',
-        pageSize: 20,
-        locationBias: { circle: { center: { latitude: lat, longitude: lon }, radius } },
-      };
-      if (pageToken) body.pageToken = pageToken;
-      const r = await fetchWithTimeout(
-        url,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Goog-Api-Key': apiKey,
-            'X-Goog-FieldMask': fieldMask,
+  for (const pt of points) {
+    for (const q of queries) {
+      let pageToken;
+      for (let page = 0; page < 2; page++) {
+        const body = {
+          textQuery: q,
+          includedType: 'car_repair',
+          languageCode: 'fr',
+          regionCode: 'CA',
+          pageSize: 20,
+          locationBias: { circle: { center: { latitude: pt.lat, longitude: pt.lon }, radius: subRadius } },
+        };
+        if (pageToken) body.pageToken = pageToken;
+        const r = await fetchWithTimeout(
+          url,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Goog-Api-Key': apiKey,
+              'X-Goog-FieldMask': fieldMask,
+            },
+            body: JSON.stringify(body),
           },
-          body: JSON.stringify(body),
-        },
-        20000
-      );
-      if (!r.ok) {
-        const t = await r.text().catch(() => '');
-        throw new Error('Google Places ' + r.status + (t ? ' — ' + t.slice(0, 250) : ''));
+          20000
+        );
+        if (!r.ok) {
+          const t = await r.text().catch(() => '');
+          // Problème de clé/config → on arrête net et on prévient
+          if (r.status === 400 || r.status === 401 || r.status === 403) {
+            throw new Error('Google Places ' + r.status + (t ? ' — ' + t.slice(0, 250) : ''));
+          }
+          break; // autre erreur ponctuelle : on passe au point suivant
+        }
+        const j = await r.json();
+        for (const pl of j.places || []) {
+          const key = (pl.websiteUri || '') + '|' + (pl.displayName?.text || '') + '|' + (pl.formattedAddress || '');
+          if (!byKey.has(key)) byKey.set(key, pl);
+        }
+        pageToken = j.nextPageToken;
+        if (!pageToken) break;
+        await sleep(1200);
       }
-      const j = await r.json();
-      for (const pl of j.places || []) {
-        const key = (pl.websiteUri || '') + '|' + (pl.displayName?.text || '') + '|' + (pl.formattedAddress || '');
-        if (!byKey.has(key)) byKey.set(key, pl);
-      }
-      pageToken = j.nextPageToken;
-      if (!pageToken) break;
-      await sleep(1500); // court délai avant d'utiliser la page suivante
     }
   }
   return [...byKey.values()].map((pl) => {
