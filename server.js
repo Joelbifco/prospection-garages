@@ -1370,9 +1370,11 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) {
       return await handleApi(req, res, url);
     }
-    // Si l'auth est active et qu'on n'est pas connecté, on sert la page de connexion
-    // (elle est autonome : styles et script inclus, aucun autre fichier requis).
-    if (AUTH_ENABLED && !isAuthed(req) && url.pathname !== '/login.html') {
+    // Si l'auth est active et qu'on n'est pas connecté, on sert la page de connexion.
+    // Exception : les images et styles (logo, favicon…) restent accessibles pour que
+    // la page de connexion puisse les afficher (ce ne sont pas des données sensibles).
+    const isPublicAsset = /\.(png|jpe?g|gif|svg|webp|ico|css)$/i.test(url.pathname);
+    if (AUTH_ENABLED && !isAuthed(req) && url.pathname !== '/login.html' && !isPublicAsset) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(readFileSync(path.join(PUBLIC_DIR, 'login.html')));
     }
