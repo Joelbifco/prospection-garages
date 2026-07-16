@@ -1085,7 +1085,7 @@ async function checkReplies() {
           messageId: m.messageId,
         };
         replies.push(rec);
-        if (!isRejection(text)) interesting.push(rec);
+        if (!isRejection(text)) interesting.push({ ...rec, phone: m.contact.phone || '' });
         const idx = contacts.findIndex((c) => c.id === m.contact.id);
         if (idx >= 0 && contacts[idx].status !== 'partenaire') contacts[idx].status = 'répondu';
       }
@@ -1140,36 +1140,106 @@ async function checkReplies() {
   return { new: matches.length, newBounces: bounceHits, total: replies.length };
 }
 
-// Envoie une alerte courriel avec les réponses potentiellement intéressées
+// Prochain créneau à l'heure pile, du lundi au vendredi entre 8h et 17h (heure locale du serveur = Est)
+function nextWorkSlot(offsetSlots = 0) {
+  const t = new Date();
+  t.setMinutes(0, 0, 0);
+  t.setHours(t.getHours() + 1);
+  for (let i = 0; i < 500; i++) {
+    const day = t.getDay();
+    const h = t.getHours();
+    if (day >= 1 && day <= 5 && h >= 8 && h < 17) break;
+    if (day === 0 || day === 6 || h >= 17) {
+      t.setDate(t.getDate() + 1);
+      t.setHours(8, 0, 0, 0);
+    } else if (h < 8) {
+      t.setHours(8, 0, 0, 0);
+    } else {
+      t.setHours(t.getHours() + 1);
+    }
+  }
+  // décale de 30 min par piste pour éviter les chevauchements dans un même lot
+  t.setMinutes(t.getMinutes() + 30 * offsetSlots);
+  return t;
+}
+
+function icsStamp(d) {
+  return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+function icsEscape(s) {
+  return String(s || '').replace(/([,;\\])/g, '\\$1').replace(/\n/g, '\\n');
+}
+
+// Construit une invitation calendrier (iCalendar) « Contacter ce garage »
+function buildCallICS(reply, organizer, attendee) {
+  const start = nextWorkSlot(reply._slot || 0);
+  const end = new Date(start.getTime() + 30 * 60000);
+  const extrait = (reply.text || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+  const desc = [
+    `Garage : ${reply.name || reply.from}`,
+    `Courriel : ${reply.from}`,
+    reply.phone ? `Téléphone : ${reply.phone}` : '',
+    '',
+    `Sa réponse : « ${extrait} »`,
+    '',
+    'Répondre dans l\'app : http://137.184.167.254:3000',
+  ]
+    .filter((l) => l !== undefined)
+    .join('\n');
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Bifco//Prospection Garages//FR',
+    'CALSCALE:GREGORIAN',
+    'METHOD:REQUEST',
+    'BEGIN:VEVENT',
+    `UID:lead-${reply.id}@bifco`,
+    `DTSTAMP:${icsStamp(new Date())}`,
+    `DTSTART:${icsStamp(start)}`,
+    `DTEND:${icsStamp(end)}`,
+    `SUMMARY:${icsEscape('📞 Contacter ' + (reply.name || reply.from) + ' (partenaire potentiel)')}`,
+    `DESCRIPTION:${icsEscape(desc)}`,
+    `ORGANIZER;CN=Bifco:mailto:${organizer}`,
+    `ATTENDEE;CN=${icsEscape(attendee)};RSVP=TRUE:mailto:${attendee}`,
+    'STATUS:CONFIRMED',
+    'BEGIN:VALARM',
+    'TRIGGER:-PT15M',
+    'ACTION:DISPLAY',
+    'DESCRIPTION:Rappel',
+    'END:VALARM',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
+}
+
+// Envoie une alerte + une invitation calendrier pour chaque piste (réponse hors refus)
 async function notifyPositiveReplies(settings, to, replies) {
   const transport = makeTransport(settings);
   const fromLine = settings.from.name
     ? `"${settings.from.name}" <${settings.from.email}>`
     : settings.from.email;
-  const lines = replies
-    .map((r) => {
-      const extrait = (r.text || '').replace(/\s+/g, ' ').trim().slice(0, 300);
-      return `• ${r.name || r.from} <${r.from}>\n  « ${extrait} »`;
-    })
-    .join('\n\n');
-  const n = replies.length;
-  await transport.sendMail({
-    from: fromLine,
-    to,
-    subject:
-      n === 1
-        ? `🔥 Réponse d'un garage : ${replies[0].name || replies[0].from}`
-        : `🔥 ${n} garages ont répondu !`,
-    text:
-      'Bonjour,\n\n' +
-      (n === 1 ? 'Un garage vient de répondre :' : `${n} garages viennent de répondre :`) +
-      '\n\n' +
-      lines +
-      '\n\n' +
-      'Réponds-leur directement dans l\'app (onglet 💬 Réponses) :\n' +
-      'http://137.184.167.254:3000\n\n' +
-      '— App Prospection Garages',
-  });
+  for (let i = 0; i < replies.length; i++) {
+    const r = replies[i];
+    r._slot = i;
+    const extrait = (r.text || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+    const ics = buildCallICS(r, settings.from.email, to);
+    await transport.sendMail({
+      from: fromLine,
+      to,
+      subject: `🔥 À contacter : ${r.name || r.from}`,
+      text:
+        'Bonjour,\n\n' +
+        'Un garage vient de répondre — piste à contacter :\n\n' +
+        `Garage : ${r.name || r.from}\n` +
+        `Courriel : ${r.from}\n` +
+        (r.phone ? `Téléphone : ${r.phone}\n` : '') +
+        `\nSa réponse : « ${extrait} »\n\n` +
+        '📅 Un rappel a été ajouté à ton calendrier Google (à contacter, en heures de travail).\n\n' +
+        'Réponds-lui aussi dans l\'app : http://137.184.167.254:3000\n\n' +
+        '— App Prospection Garages',
+      icalEvent: { method: 'REQUEST', content: ics },
+    });
+  }
 }
 
 // Répondre à un garage (envoi SMTP dans le même fil, hors plafond de réchauffement)
