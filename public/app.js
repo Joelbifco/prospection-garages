@@ -211,7 +211,7 @@ function renderContacts() {
       <td style="text-align:center">${c.emailsSent || 0}</td>
       <td><span class="stage stage-${c.stage}">${esc(stageLabel(c.stage))}</span></td>
       <td><select class="cstatus" data-id="${c.id}">
-        ${['nouveau', 'contacté', 'répondu', 'partenaire'].map((s) => `<option ${c.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+        ${['nouveau', 'contacté', 'répondu', 'partenaire', 'invalide'].map((s) => `<option ${c.status === s ? 'selected' : ''}>${s}</option>`).join('')}
       </select></td>
       <td><button class="ghost cdel" data-id="${c.id}">✕</button></td>
     </tr>`
@@ -488,11 +488,9 @@ $('#btn-check-replies').addEventListener('click', async () => {
   try {
     const r = await api('/replies/check', 'POST');
     if (r.error) throw new Error(r.error);
-    setStatus(
-      '#replies-status',
-      r.new > 0 ? `✅ ${r.new} nouvelle(s) réponse(s) !` : '✅ Aucune nouvelle réponse pour l\'instant.',
-      'done'
-    );
+    let msg = r.new > 0 ? `✅ ${r.new} nouvelle(s) réponse(s) !` : '✅ Aucune nouvelle réponse pour l\'instant.';
+    if (r.newBounces > 0) msg += ` · 🚫 ${r.newBounces} adresse(s) invalide(s) mise(s) à l'écart`;
+    setStatus('#replies-status', msg, 'done');
     loadReplies();
   } catch (e) {
     setStatus('#replies-status', '⚠️ ' + e.message, 'error');

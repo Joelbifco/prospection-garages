@@ -108,6 +108,7 @@ const FILES = {
   templates: path.join(DATA_DIR, 'templates.json'),
   sends: path.join(DATA_DIR, 'sends.json'),
   replies: path.join(DATA_DIR, 'replies.json'),
+  bounces: path.join(DATA_DIR, 'bounces.json'),
 };
 
 const DEFAULTS = {
@@ -142,6 +143,7 @@ const DEFAULTS = {
   templates: [],
   sends: [],
   replies: [],
+  bounces: [],
 };
 
 async function ensureData() {
@@ -775,8 +777,13 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
 
   const results = [];
   let skippedDuplicate = 0;
+  let skippedInvalid = 0;
   for (let i = 0; i < targets.length; i++) {
     const c = targets[i];
+    if (c.status === 'invalide') {
+      skippedInvalid++;
+      continue; // mauvaise adresse (a rebondi) → jamais d'envoi
+    }
     if (alreadySent.has(c.id)) {
       skippedDuplicate++;
       continue; // ce garage a déjà reçu ce modèle → on ne renvoie pas
@@ -811,7 +818,7 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
       await sleep(Number(settings.sendDelayMs) || 0);
     }
   }
-  return { results, skippedDuplicate };
+  return { results, skippedDuplicate, skippedInvalid };
 }
 
 // ---------------------------------------------------------------------------
@@ -946,9 +953,11 @@ const FUNNEL_STAGES = [
   { key: 'multi', label: 'Multi-relance', hint: '3 courriels ou +' },
   { key: 'repondu', label: 'A répondu', hint: 'réponse reçue' },
   { key: 'partenaire', label: 'Partenaire', hint: 'converti' },
+  { key: 'invalide', label: 'Adresse invalide', hint: 'courriel qui a rebondi (mis à l\'écart)' },
 ];
 
 function contactStage(contact, emailsSent) {
+  if (contact.status === 'invalide') return 'invalide';
   if (contact.status === 'partenaire') return 'partenaire';
   if (contact.status === 'répondu') return 'repondu';
   if (emailsSent >= 3) return 'multi';
@@ -1000,10 +1009,26 @@ async function checkReplies() {
   const port = Number(settings.imap?.port) || 993;
 
   const client = new ImapFlow({ host, port, secure: true, auth: { user, pass }, logger: false });
-  const [contacts, replies] = await Promise.all([load('contacts'), load('replies')]);
+  const [contacts, replies, bounces] = await Promise.all([
+    load('contacts'),
+    load('replies'),
+    load('bounces'),
+  ]);
   const byEmail = new Map(contacts.filter((c) => c.email).map((c) => [c.email.toLowerCase(), c]));
   const seen = new Set(replies.map((r) => r.messageId).filter(Boolean));
+  const seenBounce = new Set(bounces.map((b) => b.messageId).filter(Boolean));
   const matches = [];
+  const bounceCandidates = [];
+  let bounceHits = 0;
+
+  const isBounce = (from, subject) => {
+    const f = (from || '').toLowerCase();
+    const s = (subject || '').toLowerCase();
+    return (
+      /mailer-daemon|postmaster|mail delivery (subsystem|system)/.test(f) ||
+      /delivery status notification|undeliverable|undelivered|returned to sender|delivery (has )?failed|mail delivery failed|failure notice|adresse.*introuvable|n'a pas pu être remis/.test(s)
+    );
+  };
 
   await client.connect();
   try {
@@ -1025,9 +1050,13 @@ async function checkReplies() {
           if (contact && !seen.has(messageId)) {
             seen.add(messageId);
             matches.push({ uid: msg.uid, env, contact, messageId, fromAddr });
+          } else if (!contact && isBounce(fromAddr, env.subject) && !seenBounce.has(messageId)) {
+            seenBounce.add(messageId);
+            bounceCandidates.push({ uid: msg.uid, env, messageId });
           }
         }
       }
+      // Réponses
       for (const m of matches) {
         let text = '';
         try {
@@ -1050,14 +1079,45 @@ async function checkReplies() {
         const idx = contacts.findIndex((c) => c.id === m.contact.id);
         if (idx >= 0 && contacts[idx].status !== 'partenaire') contacts[idx].status = 'répondu';
       }
+      // Rebonds (mauvaises adresses) → marquer le garage « invalide »
+      for (const bc of bounceCandidates) {
+        let body = '';
+        try {
+          const full = await client.fetchOne(bc.uid, { source: true }, { uid: true });
+          const parsed = await simpleParser(full.source);
+          body = ((parsed.text || '') + ' ' + (parsed.html || '')).toLowerCase();
+        } catch {
+          /* illisible */
+        }
+        let hit = null;
+        for (const [email, contact] of byEmail) {
+          if (email && body.includes(email)) {
+            hit = contact;
+            break;
+          }
+        }
+        if (hit) {
+          bounces.push({
+            id: randomUUID(),
+            contactId: hit.id,
+            email: hit.email,
+            name: hit.name || '',
+            date: bc.env.date ? new Date(bc.env.date).toISOString() : new Date().toISOString(),
+            messageId: bc.messageId,
+          });
+          const idx = contacts.findIndex((c) => c.id === hit.id);
+          if (idx >= 0) contacts[idx].status = 'invalide';
+          bounceHits++;
+        }
+      }
     } finally {
       lock.release();
     }
   } finally {
     await client.logout().catch(() => {});
   }
-  await Promise.all([save('replies', replies), save('contacts', contacts)]);
-  return { new: matches.length, total: replies.length };
+  await Promise.all([save('replies', replies), save('contacts', contacts), save('bounces', bounces)]);
+  return { new: matches.length, newBounces: bounceHits, total: replies.length };
 }
 
 // Répondre à un garage (envoi SMTP dans le même fil, hors plafond de réchauffement)

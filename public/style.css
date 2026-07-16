@@ -118,6 +118,8 @@ a:hover { text-decoration: underline; }
 .pill.partenaire { background: rgba(62,207,142,.25); color: var(--ok); }
 .pill.ok { background: rgba(62,207,142,.15); color: var(--ok); }
 .pill.erreur { background: rgba(255,92,114,.15); color: var(--danger); }
+.pill.invalide { background: rgba(154,168,192,.2); color: var(--muted); text-decoration: line-through; }
+.stage-invalide { background: rgba(154,168,192,.2); color: var(--muted); }
 
 .split { display: flex; gap: 20px; align-items: flex-start; }
 .split .grow { flex: 1; }
