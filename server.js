@@ -119,6 +119,7 @@ const DEFAULTS = {
     sendDelayMs: 4000,
     signature: '',
     company: '', // adresse postale (recommandé pour la conformité anti-pourriel)
+    replyNotifyEmail: '', // alerte envoyée ici quand un garage répond (hors refus)
     warmup: { enabled: false, startDate: null, maxPerDay: 50 },
     auto: {
       enabled: false,
@@ -1020,6 +1021,13 @@ async function checkReplies() {
   const matches = [];
   const bounceCandidates = [];
   let bounceHits = 0;
+  const interesting = []; // réponses qui ne sont PAS un refus → à signaler
+
+  // Un refus clair (sinon on considère la réponse comme une piste)
+  const isRejection = (t) =>
+    /non merci|pas int[ée]ress|aucun int[ée]r[êe]t|d[ée]sabonn|retir[ez]|cessez|arr[êe]tez|ne .{0,25}int[ée]resse pas|not interested|no,? thank|unsubscribe/i.test(
+      t || ''
+    );
 
   const isBounce = (from, subject) => {
     const f = (from || '').toLowerCase();
@@ -1066,7 +1074,7 @@ async function checkReplies() {
         } catch {
           /* pas de texte lisible */
         }
-        replies.push({
+        const rec = {
           id: randomUUID(),
           contactId: m.contact.id,
           from: m.fromAddr,
@@ -1075,7 +1083,9 @@ async function checkReplies() {
           date: m.env.date ? new Date(m.env.date).toISOString() : new Date().toISOString(),
           text,
           messageId: m.messageId,
-        });
+        };
+        replies.push(rec);
+        if (!isRejection(text)) interesting.push(rec);
         const idx = contacts.findIndex((c) => c.id === m.contact.id);
         if (idx >= 0 && contacts[idx].status !== 'partenaire') contacts[idx].status = 'répondu';
       }
@@ -1117,7 +1127,49 @@ async function checkReplies() {
     await client.logout().catch(() => {});
   }
   await Promise.all([save('replies', replies), save('contacts', contacts), save('bounces', bounces)]);
+
+  // Alerte : réponses potentiellement intéressées (hors refus) → courriel à l'utilisateur
+  const notifyTo = (settings.replyNotifyEmail || '').trim();
+  if (interesting.length && notifyTo) {
+    try {
+      await notifyPositiveReplies(settings, notifyTo, interesting);
+    } catch {
+      /* alerte échouée, on réessaiera au prochain passage */
+    }
+  }
   return { new: matches.length, newBounces: bounceHits, total: replies.length };
+}
+
+// Envoie une alerte courriel avec les réponses potentiellement intéressées
+async function notifyPositiveReplies(settings, to, replies) {
+  const transport = makeTransport(settings);
+  const fromLine = settings.from.name
+    ? `"${settings.from.name}" <${settings.from.email}>`
+    : settings.from.email;
+  const lines = replies
+    .map((r) => {
+      const extrait = (r.text || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+      return `• ${r.name || r.from} <${r.from}>\n  « ${extrait} »`;
+    })
+    .join('\n\n');
+  const n = replies.length;
+  await transport.sendMail({
+    from: fromLine,
+    to,
+    subject:
+      n === 1
+        ? `🔥 Réponse d'un garage : ${replies[0].name || replies[0].from}`
+        : `🔥 ${n} garages ont répondu !`,
+    text:
+      'Bonjour,\n\n' +
+      (n === 1 ? 'Un garage vient de répondre :' : `${n} garages viennent de répondre :`) +
+      '\n\n' +
+      lines +
+      '\n\n' +
+      'Réponds-leur directement dans l\'app (onglet 💬 Réponses) :\n' +
+      'http://137.184.167.254:3000\n\n' +
+      '— App Prospection Garages',
+  });
 }
 
 // Répondre à un garage (envoi SMTP dans le même fil, hors plafond de réchauffement)
