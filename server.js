@@ -132,6 +132,8 @@ const DEFAULTS = {
       weekdaysOnly: true, // n'envoyer que du lundi au vendredi
       accumulateZonesPerDay: 4, // nb de zones ratissées chaque jour pour accumuler
       findOnly: false, // true = trouver/accumuler seulement, sans envoyer automatiquement
+      notifyEmail: '', // courriel où prévenir quand tous les garages sont contactés
+      allContactedNotified: false,
       lastRunDate: null,
       lastResult: null,
     },
@@ -892,6 +894,20 @@ async function runAutoOnce(force = false) {
     const ok = results.filter((r) => r.status === 'ok').length;
 
     settings.auto = settings.auto || {};
+
+    // Notification : plus aucun garage « nouveau » → tous contactés → temps des relances
+    const stillNew = contacts.filter(isNew).length;
+    if (stillNew === 0 && contacts.length >= 25 && !settings.auto.allContactedNotified) {
+      try {
+        await notifyAllContacted(settings, contacts, await load('replies'));
+        settings.auto.allContactedNotified = true;
+      } catch {
+        /* notification échouée, on réessaiera au prochain passage */
+      }
+    } else if (stillNew > 0) {
+      settings.auto.allContactedNotified = false;
+    }
+
     settings.auto.lastRunDate = todayStr();
     settings.auto.lastResult = {
       at: new Date().toISOString(),
@@ -1089,6 +1105,30 @@ async function sendReplyTo(contactId, body) {
   return { ok: true };
 }
 
+// Prévient l'utilisateur par courriel quand tous les garages ont été contactés
+async function notifyAllContacted(settings, contacts, replies) {
+  const to = (settings.auto?.notifyEmail || settings.from?.email || settings.smtp?.user || '').trim();
+  if (!to) return;
+  const transport = makeTransport(settings);
+  const total = contacts.length;
+  const replied = new Set(replies.map((r) => r.contactId)).size;
+  const fromLine = settings.from.name
+    ? `"${settings.from.name}" <${settings.from.email}>`
+    : settings.from.email;
+  await transport.sendMail({
+    from: fromLine,
+    to,
+    subject: '🎉 Tous les garages ont été contactés — place aux relances !',
+    text:
+      'Bonjour,\n\n' +
+      `Bonne nouvelle : les ${total} garages de ta réserve ont maintenant tous reçu un premier courriel.\n` +
+      `${replied} garage(s) t'ont déjà répondu.\n\n` +
+      "C'est le moment idéal pour lancer les relances (avec un modèle différent).\n\n" +
+      'Ouvre ton app : http://137.184.167.254:3000\n\n' +
+      '— App Prospection Garages',
+  });
+}
+
 // ---------------------------------------------------------------------------
 //  Routes API
 // ---------------------------------------------------------------------------
@@ -1216,6 +1256,7 @@ async function handleApi(req, res, url) {
       weekdaysOnly: body.weekdaysOnly ?? cur.weekdaysOnly ?? true,
       accumulateZonesPerDay: body.accumulateZonesPerDay ?? cur.accumulateZonesPerDay ?? 4,
       findOnly: body.findOnly ?? cur.findOnly ?? false,
+      notifyEmail: body.notifyEmail ?? cur.notifyEmail ?? '',
     };
     await save('settings', settings);
     return sendJSON(res, 200, { ok: true });
