@@ -11,6 +11,7 @@ import { existsSync, readFileSync, mkdirSync, copyFileSync, readdirSync } from '
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
@@ -100,16 +101,24 @@ function migrateToSyncIfNeeded() {
 migrateToSyncIfNeeded();
 
 // ---------------------------------------------------------------------------
-//  Couche de données : simples fichiers JSON (aucune base de données requise)
+//  Campagnes : plusieurs sections indépendantes dans la même app.
+//  Chaque campagne a son propre dossier de données (contacts, réglages, etc.).
 // ---------------------------------------------------------------------------
-const FILES = {
-  settings: path.join(DATA_DIR, 'settings.json'),
-  contacts: path.join(DATA_DIR, 'contacts.json'),
-  templates: path.join(DATA_DIR, 'templates.json'),
-  sends: path.join(DATA_DIR, 'sends.json'),
-  replies: path.join(DATA_DIR, 'replies.json'),
-  bounces: path.join(DATA_DIR, 'bounces.json'),
-};
+const CAMPAIGNS = [
+  { id: 'garages', name: '🔧 Garages' },
+  { id: 'moteurs', name: '⚙️ Moteurs' },
+];
+const DATA_KEYS = ['settings', 'contacts', 'templates', 'sends', 'replies', 'bounces'];
+
+// Contexte « campagne courante » par requête/tâche (sans changer tous les appels).
+const campaignCtx = new AsyncLocalStorage();
+function currentCampaign() {
+  const c = campaignCtx.getStore();
+  return CAMPAIGNS.some((x) => x.id === c) ? c : 'garages';
+}
+function fileFor(campaign, key) {
+  return path.join(DATA_DIR, campaign, key + '.json');
+}
 
 const DEFAULTS = {
   settings: {
@@ -147,43 +156,121 @@ const DEFAULTS = {
   bounces: [],
 };
 
-async function ensureData() {
-  if (!existsSync(DATA_DIR)) await mkdir(DATA_DIR, { recursive: true });
-  for (const [key, file] of Object.entries(FILES)) {
-    if (!existsSync(file)) {
-      await writeFile(file, JSON.stringify(DEFAULTS[key], null, 2), 'utf8');
+// Migration : ancienne structure plate (data/settings.json…) → data/garages/…
+function migrateFlatToGarages() {
+  const garagesDir = path.join(DATA_DIR, 'garages');
+  if (existsSync(path.join(DATA_DIR, 'settings.json')) && !existsSync(garagesDir)) {
+    mkdirSync(garagesDir, { recursive: true });
+    for (const key of DATA_KEYS) {
+      const flat = path.join(DATA_DIR, key + '.json');
+      if (existsSync(flat)) {
+        try {
+          copyFileSync(flat, fileFor('garages', key));
+        } catch {
+          /* ignore */
+        }
+      }
     }
-  }
-  // Crée un modèle de courriel par défaut au premier lancement
-  const tpls = await load('templates');
-  if (tpls.length === 0) {
-    tpls.push({
-      id: randomUUID(),
-      name: 'Invitation partenariat (défaut)',
-      subject: 'Partenariat installation moteurs — {{ville}}',
-      body:
-        'Bonjour,\n\n' +
-        "Je m'appelle [Ton nom] de Bifco. Nous cherchons des garages fiables dans la région de {{ville}} " +
-        'pour installer nos moteurs auprès de nos clients.\n\n' +
-        'Nous fournissons les moteurs et les clients — vous réalisez l\'installation, rémunérée à chaque pose. ' +
-        'Aucun engagement, aucun frais pour rejoindre le réseau.\n\n' +
-        'Est-ce que ça pourrait vous intéresser ? Je peux vous appeler pour en discuter 5 minutes.\n\n' +
-        'Au plaisir,',
-      updatedAt: new Date().toISOString(),
-    });
-    await save('templates', tpls);
+    console.log('  🔁  Anciennes données déplacées vers la campagne « Garages ».');
   }
 }
 
+function defaultTemplateFor(campaign) {
+  if (campaign === 'moteurs') {
+    return {
+      id: randomUUID(),
+      name: 'Offre moteurs (défaut)',
+      subject: 'Moteurs et transmissions pour {{nom}}',
+      body:
+        'Bonjour,\n\n' +
+        'Bifco vend des moteurs et des transmissions de qualité, à bon prix, pour tous les véhicules.\n\n' +
+        'Que votre entreprise ait un véhicule ou toute une flotte, on peut vous fournir rapidement le bon moteur ou la bonne transmission — avec garantie.\n\n' +
+        'Besoin d\'un moteur ou d\'une transmission ? Répondez-moi et je vous fais une soumission.\n\n' +
+        'Au plaisir,',
+      updatedAt: new Date().toISOString(),
+    };
+  }
+  return {
+    id: randomUUID(),
+    name: 'Invitation partenariat (défaut)',
+    subject: 'Partenariat installation moteurs — {{ville}}',
+    body:
+      'Bonjour,\n\n' +
+      "Je m'appelle [Ton nom] de Bifco. Nous cherchons des garages fiables dans la région de {{ville}} " +
+      'pour installer nos moteurs auprès de nos clients.\n\n' +
+      'Au plaisir,',
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function ensureData() {
+  if (!existsSync(DATA_DIR)) await mkdir(DATA_DIR, { recursive: true });
+  migrateFlatToGarages();
+  for (const camp of CAMPAIGNS) {
+    const dir = path.join(DATA_DIR, camp.id);
+    if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+    for (const key of DATA_KEYS) {
+      const f = fileFor(camp.id, key);
+      if (!existsSync(f)) await writeFile(f, JSON.stringify(defaultFor(camp.id, key), null, 2), 'utf8');
+    }
+    // Modèle par défaut si la campagne n'en a aucun
+    await campaignCtx.run(camp.id, async () => {
+      const tpls = await load('templates');
+      if (tpls.length === 0) {
+        await save('templates', [defaultTemplateFor(camp.id)]);
+      }
+    });
+  }
+}
+
+// Mots-clés de recherche par campagne
+const GARAGE_QUERIES = ['garage réparation automobile', 'mécanique automobile', 'atelier mécanique'];
+const MOTEURS_QUERIES = [
+  'concessionnaire automobile',
+  'vendeur autos usagées',
+  'recycleur pièces automobiles',
+  'entreprise de construction',
+  'entreprise de transport',
+  'entreprise de camionnage',
+  'entreprise d\'excavation',
+  'entreprise de paysagement',
+  'entreprise de déneigement',
+  'atelier mécanique',
+  'location de véhicules',
+];
+
+function defaultSettingsFor(campaign) {
+  const s = structuredClone(DEFAULTS.settings);
+  if (campaign === 'moteurs') {
+    s.smtp = { host: 'smtp.hostinger.com', port: 465, secure: true, user: 'moteurs@bifcobifco.com', pass: '' };
+    s.imap = { host: 'imap.hostinger.com', port: 993 };
+    s.from = { name: 'Bifco — Moteurs et Transmissions', email: 'moteurs@bifcobifco.com' };
+    s.auto.findOnly = true; // adresse neuve : on accumule d'abord, sans envoyer (à réchauffer)
+    s.auto.smallOnly = false; // toutes les entreprises, pas seulement les petits garages
+    s.auto.radiusKm = 25;
+    s.auto.search = { queries: MOTEURS_QUERIES, includedType: '' };
+  } else {
+    s.auto.search = { queries: GARAGE_QUERIES, includedType: 'car_repair' };
+  }
+  return s;
+}
+function defaultFor(campaign, key) {
+  return key === 'settings' ? defaultSettingsFor(campaign) : structuredClone(DEFAULTS[key]);
+}
+
 async function load(key) {
+  const c = currentCampaign();
   try {
-    return JSON.parse(await readFile(FILES[key], 'utf8'));
+    return JSON.parse(await readFile(fileFor(c, key), 'utf8'));
   } catch {
-    return structuredClone(DEFAULTS[key]);
+    return defaultFor(c, key);
   }
 }
 async function save(key, value) {
-  await writeFile(FILES[key], JSON.stringify(value, null, 2), 'utf8');
+  const c = currentCampaign();
+  const dir = path.join(DATA_DIR, c);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  await writeFile(fileFor(c, key), JSON.stringify(value, null, 2), 'utf8');
 }
 
 // ---------------------------------------------------------------------------
@@ -623,13 +710,17 @@ async function searchGaragesOSM(zone, opts = {}) {
 }
 
 // Recherche via Google Places (plus complet — nécessite une clé Google)
-async function googlePlacesGarages(lat, lon, radiusKm, apiKey) {
+async function googlePlacesGarages(lat, lon, radiusKm, apiKey, search) {
   const rKm = Number(radiusKm) || 15;
   const url = 'https://places.googleapis.com/v1/places:searchText';
   const fieldMask =
     'places.displayName,places.websiteUri,places.formattedAddress,places.nationalPhoneNumber,' +
     'places.internationalPhoneNumber,places.location,places.addressComponents,nextPageToken';
-  const queries = ['garage réparation automobile', 'mécanique automobile', 'atelier mécanique'];
+  const queries =
+    search && Array.isArray(search.queries) && search.queries.length
+      ? search.queries
+      : GARAGE_QUERIES;
+  const includedType = search && 'includedType' in search ? search.includedType : 'car_repair';
 
   // Quadrillage : une seule requête plafonne à ~60 résultats. En interrogeant
   // plusieurs points (centre + couronne), on couvre toute la zone et on trouve
@@ -656,12 +747,12 @@ async function googlePlacesGarages(lat, lon, radiusKm, apiKey) {
       for (let page = 0; page < 1; page++) {
         const body = {
           textQuery: q,
-          includedType: 'car_repair',
           languageCode: 'fr',
           regionCode: 'CA',
           pageSize: 20,
           locationBias: { circle: { center: { latitude: pt.lat, longitude: pt.lon }, radius: subRadius } },
         };
+        if (includedType) body.includedType = includedType;
         if (pageToken) body.pageToken = pageToken;
         const r = await fetchWithTimeout(
           url,
@@ -716,7 +807,7 @@ async function googlePlacesGarages(lat, lon, radiusKm, apiKey) {
 
 async function searchGaragesGoogle(zone, opts = {}, apiKey) {
   const geo = await geocode(zone.trim());
-  const raw = await googlePlacesGarages(geo.lat, geo.lon, Number(opts.radiusKm) || 15, apiKey);
+  const raw = await googlePlacesGarages(geo.lat, geo.lon, Number(opts.radiusKm) || 15, apiKey, opts.search);
   const r = await postProcessGarages(raw, zone.trim(), opts);
   return { zone: zone.trim(), center: geo, ...r, source: 'Google' };
 }
@@ -725,8 +816,9 @@ async function searchGaragesGoogle(zone, opts = {}, apiKey) {
 async function searchGarages(zone, opts = {}) {
   const settings = await load('settings');
   const key = settings.googleApiKey && String(settings.googleApiKey).trim();
-  if (key) return searchGaragesGoogle(zone, opts, key);
-  return searchGaragesOSM(zone, opts);
+  const withSearch = { ...opts, search: opts.search || settings.auto?.search };
+  if (key) return searchGaragesGoogle(zone, withSearch, key);
+  return searchGaragesOSM(zone, withSearch);
 }
 
 // Ajoute des garages à la liste de contacts (dédoublonnage par courriel). Mute `contacts`.
@@ -1348,6 +1440,11 @@ async function handleApi(req, res, url) {
     return sendJSON(res, 401, { error: 'Non authentifié' });
   }
 
+  // --- Liste des campagnes (sections) ---
+  if (p === '/api/campaigns' && method === 'GET') {
+    return sendJSON(res, 200, { campaigns: CAMPAIGNS, current: currentCampaign() });
+  }
+
   // --- État général ---
   if (p === '/api/state' && method === 'GET') {
     const [settings, contacts, sends] = await Promise.all([
@@ -1739,7 +1836,10 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname.startsWith('/api/')) {
-      return await handleApi(req, res, url);
+      // Chaque requête API s'exécute dans le contexte de sa campagne (en-tête X-Campaign)
+      const hc = (req.headers['x-campaign'] || '').toString();
+      const camp = CAMPAIGNS.some((x) => x.id === hc) ? hc : 'garages';
+      return await campaignCtx.run(camp, () => handleApi(req, res, url));
     }
     // Si l'auth est active et qu'on n'est pas connecté, on sert la page de connexion.
     // Exception : les images et styles (logo, favicon…) restent accessibles pour que
@@ -1769,25 +1869,30 @@ server.listen(PORT, () => {
   console.log('  (Laisse cette fenêtre ouverte pendant que tu utilises l\'app.)');
 });
 
-// Automatisation : vérifie au démarrage (après 10 s) puis toutes les 15 minutes.
-// runAutoOnce() ne s'exécute réellement qu'une fois par jour si l'auto est activée.
-setTimeout(() => {
-  runAutoOnce().then((r) => {
-    if (r && !r.skipped) console.log('  🤖  Automatisation :', JSON.stringify(r));
-  }).catch(() => {});
-}, 10000);
-setInterval(() => {
-  runAutoOnce().catch(() => {});
-}, 15 * 60 * 1000);
+// Exécute une tâche pour CHAQUE campagne, chacune dans son propre contexte.
+function forEachCampaign(fn) {
+  for (const camp of CAMPAIGNS) {
+    campaignCtx.run(camp.id, () => Promise.resolve(fn(camp.id)).catch(() => {}));
+  }
+}
 
-// Vérifie automatiquement les réponses reçues (au démarrage puis toutes les 30 min)
+// Automatisation : vérifie au démarrage (après 10 s) puis toutes les 15 minutes,
+// séparément pour chaque campagne. runAutoOnce() ne s'exécute qu'une fois par jour.
 setTimeout(() => {
-  checkReplies()
-    .then((r) => {
-      if (r && r.new > 0) console.log('  💬  Réponses : ' + r.new + ' nouvelle(s)');
+  forEachCampaign((id) =>
+    runAutoOnce().then((r) => {
+      if (r && !r.skipped) console.log(`  🤖  [${id}] Automatisation :`, JSON.stringify(r));
     })
-    .catch(() => {});
+  );
+}, 10000);
+setInterval(() => forEachCampaign(() => runAutoOnce()), 15 * 60 * 1000);
+
+// Vérifie automatiquement les réponses reçues (au démarrage puis toutes les 30 min), par campagne
+setTimeout(() => {
+  forEachCampaign((id) =>
+    checkReplies().then((r) => {
+      if (r && r.new > 0) console.log(`  💬  [${id}] Réponses : ${r.new} nouvelle(s)`);
+    })
+  );
 }, 30000);
-setInterval(() => {
-  checkReplies().catch(() => {});
-}, 30 * 60 * 1000);
+setInterval(() => forEachCampaign(() => checkReplies()), 30 * 60 * 1000);

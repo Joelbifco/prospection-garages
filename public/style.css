@@ -35,6 +35,8 @@ header h1 { margin: 0; font-size: 20px; }
 .tag { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
 
 .badges { display: flex; gap: 8px; align-items: center; }
+.campaign-picker { display: flex; flex-direction: column; gap: 2px; margin: 0; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.campaign-picker select { width: auto; padding: 6px 10px; font-size: 14px; font-weight: 700; color: var(--text); border-color: var(--accent); background: var(--panel-2); }
 .badge { padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; }
 .badge-ok { background: rgba(62,207,142,.15); color: var(--ok); border: 1px solid rgba(62,207,142,.4); }
 .badge-warn { background: rgba(255,180,84,.12); color: var(--warn); border: 1px solid rgba(255,180,84,.4); }

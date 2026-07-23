@@ -4,8 +4,11 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// Campagne (section) courante — envoyée à chaque requête
+let currentCampaign = localStorage.getItem('campaign') || 'garages';
+
 async function api(path, method = 'GET', body) {
-  const opt = { method, headers: { 'Content-Type': 'application/json' } };
+  const opt = { method, headers: { 'Content-Type': 'application/json', 'X-Campaign': currentCampaign } };
   if (body) opt.body = JSON.stringify(body);
   const r = await fetch('/api' + path, opt);
   if (r.status === 401) {
@@ -14,6 +17,25 @@ async function api(path, method = 'GET', body) {
     return new Promise(() => {}); // stoppe la suite
   }
   return r.json();
+}
+
+// Charge la liste des campagnes dans le sélecteur + gère le changement
+async function initCampaigns() {
+  const sel = $('#campaign-select');
+  if (!sel) return;
+  try {
+    const data = await api('/campaigns');
+    const list = (data && data.campaigns) || [{ id: 'garages', name: 'Garages' }];
+    if (!list.some((c) => c.id === currentCampaign)) currentCampaign = list[0].id;
+    sel.innerHTML = list
+      .map((c) => `<option value="${c.id}" ${c.id === currentCampaign ? 'selected' : ''}>${esc(c.name)}</option>`)
+      .join('');
+    sel.addEventListener('change', () => {
+      currentCampaign = sel.value;
+      localStorage.setItem('campaign', currentCampaign);
+      location.reload(); // recharge tout pour la nouvelle campagne
+    });
+  } catch (_) {}
 }
 
 let toastTimer;
@@ -761,4 +783,5 @@ $('#btn-test-mail').addEventListener('click', async () => {
 });
 
 // ===== Démarrage =====
+initCampaigns();
 refreshBadge();
