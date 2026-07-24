@@ -106,7 +106,7 @@ migrateToSyncIfNeeded();
 // ---------------------------------------------------------------------------
 const CAMPAIGNS = [
   { id: 'garages', name: '🔧 Garages', noun: 'garage', nounPl: 'garages', title: 'Prospection Garages' },
-  { id: 'moteurs', name: '⚙️ Moteurs', noun: 'entreprise', nounPl: 'entreprises', title: 'Prospection Moteurs' },
+  { id: 'moteurs', name: '⚙️ Entreprises', noun: 'entreprise', nounPl: 'entreprises', title: 'Prospection Entreprises' },
 ];
 const DATA_KEYS = ['settings', 'contacts', 'templates', 'sends', 'replies', 'bounces'];
 
@@ -381,6 +381,27 @@ async function overpassGarages(lat, lon, radiusKm, includeDealers = false) {
   nwr["craft"="agricultural_engines"](around:${R},${lat},${lon});
 ${dealerLine});
 out center tags;`;
+  return runOverpass(q);
+}
+
+// Recherche « toutes entreprises » (gratuit) : commerces, bureaux et métiers
+// (construction, etc.) qui ont un site web OU un courriel publié — donc ceux
+// pour qui on peut trouver une adresse. Sert la campagne Entreprises.
+async function overpassBusinesses(lat, lon, radiusKm) {
+  const R = Math.round(Math.max(1, Math.min(60, radiusKm)) * 1000);
+  const A = `(around:${R},${lat},${lon})`;
+  const clauses = [];
+  for (const cat of ['shop', 'office', 'craft', 'industrial']) {
+    for (const has of ['website', 'contact:website', 'email', 'contact:email']) {
+      clauses.push(`  nwr["${cat}"]["${has}"]${A};`);
+    }
+  }
+  const q = `[out:json][timeout:90];\n(\n${clauses.join('\n')}\n);\nout center tags;`;
+  return runOverpass(q);
+}
+
+// Exécute une requête Overpass sur plusieurs miroirs (bascule si l'un tombe).
+async function runOverpass(q) {
   const endpoints = [
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
@@ -460,6 +481,13 @@ function normalizeGarage(el) {
     lat,
     lon,
   };
+}
+
+function normalizeBusiness(el) {
+  const g = normalizeGarage(el);
+  const t = el.tags || {};
+  if (!t.name && !t.operator) g.name = 'Entreprise sans nom';
+  return g;
 }
 
 // --- Extraction de courriels depuis les sites web -------------------------
@@ -703,6 +731,15 @@ async function postProcessGarages(list, zoneStr, { smallOnly = true, scrape = tr
 // Recherche via OpenStreetMap (gratuit, sans clé)
 async function searchGaragesOSM(zone, opts = {}) {
   const geo = await geocode(zone.trim());
+  // La campagne Entreprises cherche toutes les entreprises ; les autres,
+  // les garages (avec le filtre « petits garages » habituel).
+  const businesses = currentCampaign() === 'moteurs';
+  if (businesses) {
+    const raw = await overpassBusinesses(geo.lat, geo.lon, Number(opts.radiusKm) || 15);
+    const list = raw.map(normalizeBusiness);
+    const r = await postProcessGarages(list, zone.trim(), { ...opts, smallOnly: false });
+    return { zone: zone.trim(), center: geo, ...r, source: 'OpenStreetMap' };
+  }
   const raw = await overpassGarages(geo.lat, geo.lon, Number(opts.radiusKm) || 15, !(opts.smallOnly ?? true));
   const list = raw.map(normalizeGarage);
   const r = await postProcessGarages(list, zone.trim(), opts);

@@ -1,13 +1,14 @@
 // ---------------------------------------------------------------------------
-//  Outil : prépare la campagne « Moteurs » pour commencer à TROUVER des
-//  courriels d'entreprises tout de suite. Copie la clé Google de Garages,
-//  fixe les ZONES d'une région, active la recherche auto et garde Moteurs
-//  en « trouver seulement » (findOnly) — aucun envoi tant que l'adresse
-//  neuve n'est pas réchauffée. Sans danger, relançable autant qu'on veut.
+//  Outil : prépare la campagne « Entreprises » (moteurs@bifcobifco.com) pour
+//  commencer à TROUVER des courriels d'entreprises tout de suite, avec la
+//  RECHERCHE GRATUITE (OpenStreetMap) — aucune clé Google, aucune limite.
+//  Fixe les zones (Montréal par défaut), active la recherche auto et garde
+//  la campagne en « trouver seulement » (findOnly) : aucun envoi tant que
+//  l'adresse neuve n'est pas réchauffée. Sans danger, relançable à volonté.
 //
 //  Usage :
-//     node outils/demarrer-moteurs.js            (Montréal + région, par défaut)
-//     node outils/demarrer-moteurs.js quebec     (copie les zones de Garages)
+//     node outils/demarrer-moteurs.js            (Montréal + région)
+//     node outils/demarrer-moteurs.js quebec     (région de Québec)
 // ---------------------------------------------------------------------------
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -25,6 +26,14 @@ const ZONES_MONTREAL = [
   'Chateauguay', 'Vaudreuil-Dorion', 'Blainville', 'Saint-Eustache',
 ];
 
+// Grande région de Québec.
+const ZONES_QUEBEC = [
+  'Quebec', 'Levis', 'Beauport', 'Charlesbourg', 'Sainte-Foy', 'Loretteville',
+  'Val-Belair', 'Cap-Rouge', 'Sillery', 'Vanier', 'Ancienne-Lorette',
+  'Saint-Augustin-de-Desmaures', 'Boischatel', 'Sainte-Brigitte-de-Laval',
+  'Stoneham', 'Shannon', 'Pont-Rouge', 'Donnacona',
+];
+
 function lire(campagne) {
   const f = path.join(DATA_DIR, campagne, 'settings.json');
   if (!existsSync(f)) {
@@ -36,35 +45,28 @@ function lire(campagne) {
 }
 
 const region = (process.argv[2] || 'montreal').toLowerCase();
-const garages = lire('garages');
 const moteurs = lire('moteurs');
 
-const cle = garages.s.googleApiKey && String(garages.s.googleApiKey).trim();
-if (!cle) {
-  console.error('  ⛔  Aucune clé Google trouvée dans Garages. Rien à copier.');
-  process.exit(1);
-}
-
-let zones;
-let etiquette;
-if (region === 'quebec' || region === 'québec' || region === 'garages') {
-  zones = Array.isArray(garages.s.auto?.zones) ? garages.s.auto.zones.slice() : [];
-  etiquette = 'région de Québec (copiées de Garages)';
+let zones, etiquette;
+if (region === 'quebec' || region === 'québec') {
+  zones = ZONES_QUEBEC.slice();
+  etiquette = 'grande région de Québec';
 } else {
   zones = ZONES_MONTREAL.slice();
   etiquette = 'grande région de Montréal';
 }
 
-moteurs.s.googleApiKey = garages.s.googleApiKey;
 moteurs.s.auto = moteurs.s.auto || {};
 moteurs.s.auto.zones = zones;
-moteurs.s.auto.enabled = true; // le planificateur ratisse Moteurs aux 15 min
+moteurs.s.auto.enabled = true; // le planificateur ratisse aux 15 min
 moteurs.s.auto.findOnly = true; // TROUVER seulement — pas d'envoi (adresse neuve)
+// Recherche GRATUITE (OpenStreetMap) : pas de clé Google => aucune limite.
+moteurs.s.googleApiKey = '';
 
 writeFileSync(moteurs.f, JSON.stringify(moteurs.s, null, 2));
 
-console.log('  ✅  Campagne Moteurs prête à TROUVER des courriels.');
-console.log(`      • Clé Google  : copiée depuis Garages`);
+console.log('  ✅  Campagne Entreprises prête à TROUVER des courriels.');
+console.log(`      • Recherche   : GRATUITE (OpenStreetMap) — aucune limite`);
 console.log(`      • Zones       : ${zones.length} — ${etiquette}`);
 console.log(`      • Mode        : trouver seulement (aucun envoi)`);
 console.log('');

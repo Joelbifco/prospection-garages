@@ -57,6 +57,14 @@ function applyCampaignLabels(camp) {
     const label = el && el.closest('label');
     if (label) label.style.display = 'none';
   });
+  // Le courriel Entreprises est sur Hostinger, pas Google : on corrige le libellé.
+  const passInput = $('#smtp-pass');
+  const passLabel = passInput && passInput.closest('label');
+  if (passLabel) {
+    const tn = [...passLabel.childNodes].find((n) => n.nodeType === 3 && n.nodeValue.trim());
+    if (tn) tn.nodeValue = 'Mot de passe du courriel (Hostinger)';
+    passInput.placeholder = 'mot de passe de ta boîte courriel';
+  }
 }
 
 async function initCampaigns() {
