@@ -20,6 +20,45 @@ async function api(path, method = 'GET', body) {
 }
 
 // Charge la liste des campagnes dans le sélecteur + gère le changement
+// Adapte les mots de l'interface à la campagne (garage → entreprise, etc.)
+// sans détruire les <input> : on ne touche qu'aux nœuds de texte.
+function applyCampaignLabels(camp) {
+  if (!camp) return;
+  const many = camp.nounPl || 'contacts';
+  const one = camp.noun || 'contact';
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  if (camp.title) {
+    document.title = camp.title + ' — Bifco';
+    const h1 = $('header h1');
+    if (h1) h1.textContent = camp.title;
+  }
+  const tag = $('header .tag');
+  if (tag) tag.textContent = `Trouver des ${many} · composer · envoyer · mesurer`;
+  if (camp.id === 'garages') return; // libellés d'origine
+  const swap = (t) =>
+    t
+      .replace(/Garages/g, cap(many))
+      .replace(/garages/g, many)
+      .replace(/Garage/g, cap(one))
+      .replace(/garage/g, one);
+  const main = $('main');
+  if (main) {
+    const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach((n) => {
+      const v = swap(n.nodeValue);
+      if (v !== n.nodeValue) n.nodeValue = v;
+    });
+  }
+  // Le filtre « petits garages » n'a aucun sens hors Garages : on le cache.
+  ['#small-only', '#auto-small'].forEach((sel) => {
+    const el = $(sel);
+    const label = el && el.closest('label');
+    if (label) label.style.display = 'none';
+  });
+}
+
 async function initCampaigns() {
   const sel = $('#campaign-select');
   if (!sel) return;
@@ -30,6 +69,7 @@ async function initCampaigns() {
     sel.innerHTML = list
       .map((c) => `<option value="${c.id}" ${c.id === currentCampaign ? 'selected' : ''}>${esc(c.name)}</option>`)
       .join('');
+    applyCampaignLabels(list.find((c) => c.id === currentCampaign));
     sel.addEventListener('change', () => {
       currentCampaign = sel.value;
       localStorage.setItem('campaign', currentCampaign);

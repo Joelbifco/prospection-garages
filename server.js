@@ -105,8 +105,8 @@ migrateToSyncIfNeeded();
 //  Chaque campagne a son propre dossier de données (contacts, réglages, etc.).
 // ---------------------------------------------------------------------------
 const CAMPAIGNS = [
-  { id: 'garages', name: '🔧 Garages' },
-  { id: 'moteurs', name: '⚙️ Moteurs' },
+  { id: 'garages', name: '🔧 Garages', noun: 'garage', nounPl: 'garages', title: 'Prospection Garages' },
+  { id: 'moteurs', name: '⚙️ Moteurs', noun: 'entreprise', nounPl: 'entreprises', title: 'Prospection Moteurs' },
 ];
 const DATA_KEYS = ['settings', 'contacts', 'templates', 'sends', 'replies', 'bounces'];
 
