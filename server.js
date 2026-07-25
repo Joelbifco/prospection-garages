@@ -387,22 +387,30 @@ out center tags;`;
 // Recherche « toutes entreprises » (gratuit) : commerces, bureaux et métiers
 // (construction, etc.) qui ont un site web OU un courriel publié — donc ceux
 // pour qui on peut trouver une adresse. Sert la campagne Entreprises.
-async function overpassBusinesses(lat, lon, radiusKm) {
-  // Plafond à 12 km : au-delà, la requête « toutes entreprises » sur une ville
-  // dense devient trop lourde pour l'annuaire (expiration). Les zones qui se
-  // chevauchent couvrent quand même toute la région.
+// Toutes les grandes familles d'entreprises d'OpenStreetMap. L'automatisation
+// en ratisse UNE par passage (léger et fiable) et tourne dessus au fil des
+// jours pour tout couvrir. La recherche manuelle en prend quelques-unes.
+const BUSINESS_CATS = ['shop', 'office', 'craft', 'amenity', 'tourism', 'healthcare', 'leisure', 'industrial'];
+
+async function overpassBusinesses(lat, lon, radiusKm, cats) {
+  // Plafond à 12 km : au-delà, la requête sur une ville dense devient trop
+  // lourde pour l'annuaire (expiration). Les zones qui se chevauchent couvrent
+  // quand même toute la région.
   const R = Math.round(Math.max(1, Math.min(12, radiusKm)) * 1000);
   const A = `(around:${R},${lat},${lon})`;
   // Catégories explicites (l'annuaire les traite bien plus vite qu'une regex).
-  // On ne garde que les entreprises ayant un site OU un courriel publié.
+  // On ne garde que celles ayant un site OU un courriel publié (donc joignables).
+  const list = cats && cats.length ? cats : ['shop', 'office', 'craft'];
   const clauses = [];
-  for (const cat of ['shop', 'office', 'craft']) {
+  for (const cat of list) {
     for (const has of ['website', 'contact:website', 'email', 'contact:email']) {
       clauses.push(`  nwr["${cat}"]["${has}"]${A};`);
     }
   }
-  const q = `[out:json][timeout:120];\n(\n${clauses.join('\n')}\n);\nout center tags 2500;`;
-  return runOverpass(q, 110000);
+  const q = `[out:json][timeout:120];\n(\n${clauses.join('\n')}\n);\nout center tags 3000;`;
+  // Délai court par miroir : on abandonne vite un miroir lent pour essayer le
+  // suivant (5 miroirs de secours). Une requête à une seule catégorie est légère.
+  return runOverpass(q, 45000);
 }
 
 // Exécute une requête Overpass sur plusieurs miroirs (bascule si l'un tombe).
@@ -410,13 +418,20 @@ async function runOverpass(q, timeoutMs = 70000) {
   const endpoints = [
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+    'https://overpass.osm.jp/api/interpreter',
   ];
   let lastErr;
   for (const ep of endpoints) {
     try {
       const r = await fetchWithTimeout(
         ep,
-        { method: 'POST', body: 'data=' + encodeURIComponent(q) },
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'data=' + encodeURIComponent(q),
+        },
         timeoutMs
       );
       if (!r.ok) throw new Error('Overpass ' + r.status);
@@ -740,7 +755,7 @@ async function searchGaragesOSM(zone, opts = {}) {
   // les garages (avec le filtre « petits garages » habituel).
   const businesses = currentCampaign() === 'moteurs';
   if (businesses) {
-    const raw = await overpassBusinesses(geo.lat, geo.lon, Number(opts.radiusKm) || 15);
+    const raw = await overpassBusinesses(geo.lat, geo.lon, Number(opts.radiusKm) || 15, opts.businessCats);
     const list = raw.map(normalizeBusiness);
     const r = await postProcessGarages(list, zone.trim(), { ...opts, smallOnly: false });
     return { zone: zone.trim(), center: geo, ...r, source: 'OpenStreetMap' };
@@ -1001,36 +1016,43 @@ async function runAutoOnce(force = false) {
     let quotaHit = false;
     if (zones.length) {
       const perDay = Math.max(1, Math.min(zones.length, Number(auto.accumulateZonesPerDay ?? 4)));
-      let zi = auto.zoneIndex || 0;
+      // Pour Entreprises : on tourne aussi sur les familles d'entreprises (UNE par
+      // passage — léger et fiable) en parcourant les paires (zone × catégorie).
+      const isBiz = currentCampaign() === 'moteurs';
+      const cats = isBiz ? BUSINESS_CATS : [null];
+      const combos = zones.length * cats.length;
+      let ci = auto.comboIndex || 0;
       for (let k = 0; k < perDay; k++) {
-        const zone = zones[zi % zones.length];
-        zi++;
+        const zone = zones[ci % zones.length];
+        const cat = cats[Math.floor(ci / zones.length) % cats.length];
+        ci++;
         try {
           const { list } = await searchGarages(zone, {
             radiusKm: auto.radiusKm || 25,
             smallOnly: auto.smallOnly !== false,
             scrape: auto.scrape !== false,
+            businessCats: cat ? [cat] : undefined,
           });
           const r = importItems(list.filter((g) => g.email), contacts);
           totalAdded += r.added;
-          searched.push(`${zone} (+${r.added})`);
+          searched.push(`${zone}${cat ? ' [' + cat + ']' : ''} (+${r.added})`);
         } catch (e) {
           if (/quotidienne|429|RESOURCE_EXHAUSTED/i.test(e.message)) {
             quotaHit = true;
             searched.push(`${zone} (limite Google — reprend demain)`);
             break;
           }
-          searched.push(`${zone} (erreur)`);
+          searched.push(`${zone}${cat ? ' [' + cat + ']' : ''} (erreur)`);
         }
       }
-      settings.auto.zoneIndex = zi % zones.length;
+      settings.auto.comboIndex = ci % combos;
 
       // « Région épuisée » (campagnes trouver-seulement) : quand un tour complet
-      // de toutes les zones n'ajoute plus aucun nouveau contact, on prévient.
+      // de toutes les paires (zone × catégorie) n'ajoute plus aucun contact.
       if (auto.findOnly) {
         settings.auto.cycleAdded = (settings.auto.cycleAdded || 0) + totalAdded;
         settings.auto.cycleZonesDone = (settings.auto.cycleZonesDone || 0) + perDay;
-        if (settings.auto.cycleZonesDone >= zones.length) {
+        if (settings.auto.cycleZonesDone >= combos) {
           const cycleAdded = settings.auto.cycleAdded;
           settings.auto.cycleZonesDone = 0;
           settings.auto.cycleAdded = 0;
