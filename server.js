@@ -388,20 +388,25 @@ out center tags;`;
 // (construction, etc.) qui ont un site web OU un courriel publié — donc ceux
 // pour qui on peut trouver une adresse. Sert la campagne Entreprises.
 async function overpassBusinesses(lat, lon, radiusKm) {
-  const R = Math.round(Math.max(1, Math.min(60, radiusKm)) * 1000);
+  // Plafond à 12 km : au-delà, la requête « toutes entreprises » sur une ville
+  // dense devient trop lourde pour l'annuaire (expiration). Les zones qui se
+  // chevauchent couvrent quand même toute la région.
+  const R = Math.round(Math.max(1, Math.min(12, radiusKm)) * 1000);
   const A = `(around:${R},${lat},${lon})`;
+  // Catégories explicites (l'annuaire les traite bien plus vite qu'une regex).
+  // On ne garde que les entreprises ayant un site OU un courriel publié.
   const clauses = [];
-  for (const cat of ['shop', 'office', 'craft', 'industrial']) {
+  for (const cat of ['shop', 'office', 'craft']) {
     for (const has of ['website', 'contact:website', 'email', 'contact:email']) {
       clauses.push(`  nwr["${cat}"]["${has}"]${A};`);
     }
   }
-  const q = `[out:json][timeout:90];\n(\n${clauses.join('\n')}\n);\nout center tags;`;
-  return runOverpass(q);
+  const q = `[out:json][timeout:120];\n(\n${clauses.join('\n')}\n);\nout center tags 2500;`;
+  return runOverpass(q, 110000);
 }
 
 // Exécute une requête Overpass sur plusieurs miroirs (bascule si l'un tombe).
-async function runOverpass(q) {
+async function runOverpass(q, timeoutMs = 70000) {
   const endpoints = [
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
@@ -412,7 +417,7 @@ async function runOverpass(q) {
       const r = await fetchWithTimeout(
         ep,
         { method: 'POST', body: 'data=' + encodeURIComponent(q) },
-        70000
+        timeoutMs
       );
       if (!r.ok) throw new Error('Overpass ' + r.status);
       const j = await r.json();

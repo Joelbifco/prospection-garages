@@ -58,6 +58,7 @@ if (region === 'quebec' || region === 'québec') {
 
 moteurs.s.auto = moteurs.s.auto || {};
 moteurs.s.auto.zones = zones;
+moteurs.s.auto.radiusKm = 12; // rayon léger => recherche gratuite rapide et fiable
 moteurs.s.auto.enabled = true; // le planificateur ratisse aux 15 min
 moteurs.s.auto.findOnly = true; // TROUVER seulement — pas d'envoi (adresse neuve)
 // Recherche GRATUITE (OpenStreetMap) : pas de clé Google => aucune limite.
