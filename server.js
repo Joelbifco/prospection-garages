@@ -1024,6 +1024,28 @@ async function runAutoOnce(force = false) {
         }
       }
       settings.auto.zoneIndex = zi % zones.length;
+
+      // « Région épuisée » (campagnes trouver-seulement) : quand un tour complet
+      // de toutes les zones n'ajoute plus aucun nouveau contact, on prévient.
+      if (auto.findOnly) {
+        settings.auto.cycleAdded = (settings.auto.cycleAdded || 0) + totalAdded;
+        settings.auto.cycleZonesDone = (settings.auto.cycleZonesDone || 0) + perDay;
+        if (settings.auto.cycleZonesDone >= zones.length) {
+          const cycleAdded = settings.auto.cycleAdded;
+          settings.auto.cycleZonesDone = 0;
+          settings.auto.cycleAdded = 0;
+          if (cycleAdded === 0 && contacts.length >= 25 && !settings.auto.harvestNotified) {
+            try {
+              await notifyHarvestComplete(settings, contacts);
+            } catch {
+              /* notification échouée, on réessaiera */
+            }
+            settings.auto.harvestNotified = true;
+          } else if (cycleAdded > 0) {
+            settings.auto.harvestNotified = false;
+          }
+        }
+      }
     }
 
     const remaining = sendQuota;
@@ -1442,6 +1464,33 @@ async function notifyAllContacted(settings, contacts, replies) {
       "C'est le moment idéal pour lancer les relances (avec un modèle différent).\n\n" +
       'Ouvre ton app : http://137.184.167.254:3000\n\n' +
       '— App Prospection Garages',
+  });
+}
+
+// Prévient par courriel quand une campagne « trouver seulement » a épuisé ses
+// zones (un tour complet n'ajoute plus aucun nouveau contact). Envoi via le
+// compte Garages (Gmail) qui fonctionne — la campagne Entreprises n'a pas
+// encore de mot de passe SMTP (adresse neuve).
+async function notifyHarvestComplete(settings, contacts) {
+  const to = (settings.auto?.notifyEmail || 'ventes@bifco.shop').trim();
+  if (!to) return;
+  const gset = await campaignCtx.run('garages', () => load('settings'));
+  if (!gset.smtp?.host || !gset.smtp?.pass) return; // pas de compte d'envoi prêt
+  const transport = makeTransport(gset);
+  const fromLine = gset.from?.name ? `"${gset.from.name}" <${gset.from.email}>` : gset.from?.email;
+  const nbZones = (settings.auto?.zones || []).length;
+  await transport.sendMail({
+    from: fromLine,
+    to,
+    subject: '✅ Zones Entreprises épuisées — tous les contacts trouvés !',
+    text:
+      'Bonjour,\n\n' +
+      "Bonne nouvelle : l'app a fini de ratisser tes zones d'entreprises.\n" +
+      `Ta réserve compte maintenant ${contacts.length} entreprises avec courriel.\n\n` +
+      `Un tour complet des ${nbZones} zones n'ajoute plus de nouveaux contacts — la région est couverte.\n\n` +
+      "Prochaines étapes possibles : ajouter d'autres régions, ou (après réchauffement de l'adresse) commencer les envois.\n\n" +
+      'Ouvre ton app : http://137.184.167.254:3000\n\n' +
+      '— App Prospection Entreprises',
   });
 }
 
