@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { promises as dns } from 'node:dns';
 import nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
@@ -1517,6 +1518,151 @@ async function notifyHarvestComplete(settings, contacts) {
 }
 
 // ---------------------------------------------------------------------------
+//  Gardien de livraison : vérifie que chaque adresse d'envoi est bien
+//  « scellée » (SPF/DKIM/DMARC/MX cohérents avec le fournisseur réellement
+//  utilisé) et prévient par courriel dès qu'un problème apparaît — sur
+//  n'importe quelle campagne, présente ou future.
+// ---------------------------------------------------------------------------
+function detectProvider(host) {
+  const h = (host || '').toLowerCase();
+  if (h.includes('gmail') || h.includes('google'))
+    return { name: 'Google / Gmail', spf: '_spf.google.com', dkim: { type: 'txt', sels: ['google'] } };
+  if (h.includes('hostinger'))
+    return {
+      name: 'Hostinger',
+      spf: '_spf.mail.hostinger.com',
+      dkim: { type: 'cname', sels: ['hostingermail-a', 'hostingermail-b', 'hostingermail-c'] },
+    };
+  if (h.includes('outlook') || h.includes('office365') || h.includes('protection.outlook'))
+    return {
+      name: 'Outlook / Microsoft',
+      spf: 'spf.protection.outlook.com',
+      dkim: { type: 'cname', sels: ['selector1', 'selector2'] },
+    };
+  if (h.includes('sendgrid'))
+    return { name: 'SendGrid', spf: 'sendgrid.net', dkim: { type: 'cname', sels: ['s1', 's2'] } };
+  if (h.includes('mailgun'))
+    return { name: 'Mailgun', spf: 'mailgun.org', dkim: { type: 'txt', sels: ['smtp', 'k1', 'mx'] } };
+  if (h.includes('brevo') || h.includes('sendinblue'))
+    return { name: 'Brevo', spf: 'spf.brevo.com', dkim: { type: 'txt', sels: ['brevo1', 'brevo2', 'mail'] } };
+  if (h.includes('amazonses') || h.includes('amazon'))
+    return { name: 'Amazon SES', spf: 'amazonses.com', dkim: { type: 'txt', sels: [] } };
+  return { name: host || 'inconnu', spf: null, dkim: null };
+}
+
+async function checkDeliverability(settings) {
+  const from = (settings.from?.email || settings.smtp?.user || '').trim().toLowerCase();
+  const domain = from.split('@')[1] || '';
+  const host = settings.smtp?.host || '';
+  const res = { from, domain, host, provider: '', configured: false, problems: [], ok: true };
+  if (!domain || !host) return res; // pas encore configuré => on ne vérifie pas
+  res.configured = true;
+  const prov = detectProvider(host);
+  res.provider = prov.name;
+  const txtOf = async (name) => {
+    try {
+      return (await dns.resolveTxt(name)).map((a) => a.join(''));
+    } catch {
+      return [];
+    }
+  };
+  let mx = [];
+  try {
+    mx = await dns.resolveMx(domain);
+  } catch {
+    /* pas de MX */
+  }
+  if (!mx.length)
+    res.problems.push(
+      `Réception : aucun serveur de courriel (MX) sur ${domain} — l'adresse ne peut pas recevoir de courriels (rebonds).`
+    );
+  const spf = (await txtOf(domain)).find((t) => /^v=spf1/i.test(t)) || '';
+  if (!spf) res.problems.push(`SPF manquant sur ${domain}.`);
+  else if (prov.spf && !spf.includes(prov.spf))
+    res.problems.push(
+      `SPF incohérent : tu envoies via ${prov.name}, mais le SPF de ${domain} ne l'autorise pas.`
+    );
+  const dmarc = (await txtOf('_dmarc.' + domain)).find((t) => /^v=DMARC1/i.test(t)) || '';
+  if (!dmarc) res.problems.push(`DMARC manquant sur ${domain} (recommandé).`);
+  if (prov.dkim && prov.dkim.sels.length) {
+    let dkimOk = false;
+    for (const sel of prov.dkim.sels) {
+      const n = `${sel}._domainkey.${domain}`;
+      try {
+        if (prov.dkim.type === 'cname') {
+          if ((await dns.resolveCname(n)).length) {
+            dkimOk = true;
+            break;
+          }
+        } else if ((await txtOf(n)).length) {
+          dkimOk = true;
+          break;
+        }
+      } catch {
+        /* sélecteur absent */
+      }
+    }
+    if (!dkimOk) res.problems.push(`DKIM manquant pour ${prov.name} sur ${domain}.`);
+  }
+  res.ok = res.problems.length === 0;
+  return res;
+}
+
+// Trouve une campagne dont le SMTP fonctionne pour envoyer l'alerte.
+async function firstWorkingSmtp() {
+  for (const c of CAMPAIGNS) {
+    const s = await campaignCtx.run(c.id, () => load('settings'));
+    if (s.smtp?.host && s.smtp?.pass) return s;
+  }
+  return null;
+}
+
+async function notifyDeliverabilityProblem(campaign, res) {
+  const gset = await firstWorkingSmtp();
+  if (!gset) return;
+  const to = (gset.auto?.notifyEmail || 'ventes@bifco.shop').trim();
+  const transport = makeTransport(gset);
+  const fromLine = gset.from?.name ? `"${gset.from.name}" <${gset.from.email}>` : gset.from?.email;
+  await transport.sendMail({
+    from: fromLine,
+    to,
+    subject: `⚠️ Problème de livraison courriel — ${res.from}`,
+    text:
+      'Bonjour,\n\n' +
+      `Le gardien de livraison a détecté un problème sur l'adresse d'envoi ${res.from} (campagne « ${campaign.name} ») :\n\n` +
+      res.problems.map((p) => '  • ' + p).join('\n') +
+      "\n\nTant que ce n'est pas corrigé, ces courriels risquent de tomber dans les pourriels.\n\n" +
+      'Ouvre ton app pour vérifier les réglages : http://137.184.167.254:3000\n\n' +
+      '— Gardien de livraison',
+  });
+}
+
+// Vérifie toutes les campagnes et n'alerte QUE lorsqu'un nouveau problème
+// apparaît (évite de renvoyer un courriel chaque jour pour le même souci).
+async function checkAllDeliverabilityAndAlert() {
+  for (const c of CAMPAIGNS) {
+    await campaignCtx.run(c.id, async () => {
+      const settings = await load('settings');
+      const res = await checkDeliverability(settings);
+      if (!res.configured) return;
+      const sig = res.ok ? '' : res.problems.join('|');
+      if (!res.ok && sig !== (settings.deliverabilitySig || '')) {
+        try {
+          await notifyDeliverabilityProblem(c, res);
+          settings.deliverabilitySig = sig;
+          await save('settings', settings);
+        } catch {
+          /* réessaiera au prochain passage */
+        }
+      } else if (res.ok && settings.deliverabilitySig) {
+        settings.deliverabilitySig = '';
+        await save('settings', settings);
+      }
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 //  Routes API
 // ---------------------------------------------------------------------------
 async function handleApi(req, res, url) {
@@ -1556,6 +1702,12 @@ async function handleApi(req, res, url) {
   // --- Liste des campagnes (sections) ---
   if (p === '/api/campaigns' && method === 'GET') {
     return sendJSON(res, 200, { campaigns: CAMPAIGNS, current: currentCampaign() });
+  }
+
+  // --- Gardien de livraison : état SPF/DKIM/DMARC/MX de la campagne courante ---
+  if (p === '/api/deliverability' && method === 'GET') {
+    const dl = await checkDeliverability(await load('settings'));
+    return sendJSON(res, 200, dl);
   }
 
   // --- État général ---
@@ -2009,3 +2161,9 @@ setTimeout(() => {
   );
 }, 30000);
 setInterval(() => forEachCampaign(() => checkReplies()), 30 * 60 * 1000);
+
+// Gardien de livraison : vérifie SPF/DKIM/DMARC/MX de chaque campagne au
+// démarrage (après 60 s) puis toutes les 12 h, et alerte par courriel sur
+// tout nouveau problème — pour toutes les adresses, présentes et futures.
+setTimeout(() => checkAllDeliverabilityAndAlert().catch(() => {}), 60000);
+setInterval(() => checkAllDeliverabilityAndAlert().catch(() => {}), 12 * 60 * 60 * 1000);
