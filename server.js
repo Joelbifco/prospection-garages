@@ -1626,7 +1626,9 @@ async function checkDeliverability(settings) {
       `SPF incohérent : tu envoies via ${prov.name}, mais le SPF de ${domain} ne l'autorise pas.`
     );
   const dmarc = (await txtOf('_dmarc.' + domain)).find((t) => /^v=DMARC1/i.test(t)) || '';
-  if (!dmarc) res.problems.push(`DMARC manquant sur ${domain} (recommandé).`);
+  // DMARC = simple recommandation (non bloquant) : on le note mais on n'alerte pas.
+  res.recommendations = res.recommendations || [];
+  if (!dmarc) res.recommendations.push(`DMARC manquant sur ${domain} (recommandé, non bloquant).`);
   if (prov.dkim && prov.dkim.sels.length) {
     let dkimOk = false;
     for (const sel of prov.dkim.sels) {
@@ -1689,18 +1691,21 @@ async function checkAllDeliverabilityAndAlert() {
       const res = await checkDeliverability(settings);
       if (!res.configured) return;
       const sig = res.ok ? '' : res.problems.join('|');
-      if (!res.ok && sig !== (settings.deliverabilitySig || '')) {
+      const candidate = settings.deliverabilityCandidate || '';
+      // On n'alerte que si le MÊME problème est vu 2 fois de suite (évite les
+      // fausses alertes pendant qu'un changement DNS se propage encore).
+      if (!res.ok && sig === candidate && sig !== (settings.deliverabilitySig || '')) {
         try {
           await notifyDeliverabilityProblem(c, res);
           settings.deliverabilitySig = sig;
-          await save('settings', settings);
         } catch {
           /* réessaiera au prochain passage */
         }
-      } else if (res.ok && settings.deliverabilitySig) {
+      } else if (res.ok) {
         settings.deliverabilitySig = '';
-        await save('settings', settings);
       }
+      settings.deliverabilityCandidate = sig; // mémorise pour la prochaine vérif
+      await save('settings', settings);
     });
   }
 }
