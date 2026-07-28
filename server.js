@@ -107,7 +107,8 @@ migrateToSyncIfNeeded();
 // ---------------------------------------------------------------------------
 const CAMPAIGNS = [
   { id: 'garages', name: '🔧 Garages', noun: 'garage', nounPl: 'garages', title: 'Prospection Garages' },
-  { id: 'moteurs', name: '⚙️ Entreprises', noun: 'entreprise', nounPl: 'entreprises', title: 'Prospection Entreprises' },
+  { id: 'moteurs', name: '⚙️ Entreprises (Montréal)', noun: 'entreprise', nounPl: 'entreprises', title: 'Prospection Entreprises — Montréal', businesses: true },
+  { id: 'quebec', name: '🏙️ Entreprises (Québec)', noun: 'entreprise', nounPl: 'entreprises', title: 'Prospection Entreprises — Québec', businesses: true },
 ];
 const DATA_KEYS = ['settings', 'contacts', 'templates', 'sends', 'replies', 'bounces'];
 
@@ -116,6 +117,12 @@ const campaignCtx = new AsyncLocalStorage();
 function currentCampaign() {
   const c = campaignCtx.getStore();
   return CAMPAIGNS.some((x) => x.id === c) ? c : 'garages';
+}
+// Vrai pour les campagnes qui ciblent « toutes les entreprises » (recherche
+// large OpenStreetMap), par opposition aux garages.
+function isBusinessCampaign(id = currentCampaign()) {
+  const c = CAMPAIGNS.find((x) => x.id === id);
+  return !!(c && c.businesses);
 }
 function fileFor(campaign, key) {
   return path.join(DATA_DIR, campaign, key + '.json');
@@ -177,7 +184,7 @@ function migrateFlatToGarages() {
 }
 
 function defaultTemplateFor(campaign) {
-  if (campaign === 'moteurs') {
+  if (isBusinessCampaign(campaign)) {
     return {
       id: randomUUID(),
       name: 'Offre moteurs (défaut)',
@@ -242,14 +249,19 @@ const MOTEURS_QUERIES = [
 
 function defaultSettingsFor(campaign) {
   const s = structuredClone(DEFAULTS.settings);
-  if (campaign === 'moteurs') {
-    s.smtp = { host: 'smtp.hostinger.com', port: 465, secure: true, user: 'moteurs@bifcobifco.com', pass: '' };
-    s.imap = { host: 'imap.hostinger.com', port: 993 };
-    s.from = { name: 'Bifco — Moteurs et Transmissions', email: 'moteurs@bifcobifco.com' };
-    s.auto.findOnly = true; // adresse neuve : on accumule d'abord, sans envoyer (à réchauffer)
+  if (isBusinessCampaign(campaign)) {
+    // Campagne « entreprises » : recherche large + accumulation d'abord (findOnly),
+    // sans clé Google (recherche gratuite OpenStreetMap).
+    s.auto.findOnly = true; // on accumule d'abord ; l'envoi se branche quand l'adresse est prête
     s.auto.smallOnly = false; // toutes les entreprises, pas seulement les petits garages
-    s.auto.radiusKm = 25;
+    s.auto.radiusKm = 12; // rayon léger => recherche gratuite rapide et fiable
     s.auto.search = { queries: MOTEURS_QUERIES, includedType: '' };
+    if (campaign === 'moteurs') {
+      // Adresse d'envoi propre à la campagne Montréal.
+      s.smtp = { host: 'smtp.hostinger.com', port: 465, secure: true, user: 'moteurs@bifcobifco.com', pass: '' };
+      s.imap = { host: 'imap.hostinger.com', port: 993 };
+      s.from = { name: 'Bifco — Moteurs et Transmissions', email: 'moteurs@bifcobifco.com' };
+    }
   } else {
     s.auto.search = { queries: GARAGE_QUERIES, includedType: 'car_repair' };
   }
@@ -754,7 +766,7 @@ async function searchGaragesOSM(zone, opts = {}) {
   const geo = await geocode(zone.trim());
   // La campagne Entreprises cherche toutes les entreprises ; les autres,
   // les garages (avec le filtre « petits garages » habituel).
-  const businesses = currentCampaign() === 'moteurs';
+  const businesses = isBusinessCampaign();
   if (businesses) {
     const raw = await overpassBusinesses(geo.lat, geo.lon, Number(opts.radiusKm) || 15, opts.businessCats);
     const list = raw.map(normalizeBusiness);
@@ -1060,7 +1072,7 @@ async function runAutoOnce(force = false) {
       const perDay = Math.max(1, Math.min(zones.length, Number(auto.accumulateZonesPerDay ?? 4)));
       // Pour Entreprises : on tourne aussi sur les familles d'entreprises (UNE par
       // passage — léger et fiable) en parcourant les paires (zone × catégorie).
-      const isBiz = currentCampaign() === 'moteurs';
+      const isBiz = isBusinessCampaign();
       const cats = isBiz ? BUSINESS_CATS : [null];
       const combos = zones.length * cats.length;
       let ci = auto.comboIndex || 0;
