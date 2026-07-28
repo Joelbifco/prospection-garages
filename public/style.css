@@ -37,6 +37,11 @@ header h1 { margin: 0; font-size: 20px; }
 .badges { display: flex; gap: 8px; align-items: center; }
 .campaign-picker { display: flex; flex-direction: column; gap: 2px; margin: 0; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .campaign-picker select { width: auto; padding: 6px 10px; font-size: 14px; font-weight: 700; color: var(--text); border-color: var(--accent); background: var(--panel-2); }
+.growth-chart { display: flex; align-items: flex-end; gap: 6px; height: 200px; padding: 18px 4px 0; overflow-x: auto; }
+.gcol { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; flex: 1 0 26px; min-width: 26px; height: 100%; }
+.gbar { width: 68%; background: var(--accent); border-radius: 4px 4px 0 0; position: relative; min-height: 3px; }
+.gbar span { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 10px; color: var(--muted); white-space: nowrap; }
+.glabel { font-size: 10px; color: var(--muted); margin-top: 5px; white-space: nowrap; }
 .badge { padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; }
 .badge-ok { background: rgba(62,207,142,.15); color: var(--ok); border: 1px solid rgba(62,207,142,.4); }
 .badge-warn { background: rgba(255,180,84,.12); color: var(--warn); border: 1px solid rgba(255,180,84,.4); }

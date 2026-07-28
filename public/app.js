@@ -646,6 +646,29 @@ async function loadStats() {
         <td><span class="pill ${e.status}">${e.status}</span>${e.error ? ` <small style="color:var(--danger)">${esc(e.error).slice(0, 40)}</small>` : ''}</td>
       </tr>`
     ).join('') || '<tr><td colspan="5" style="color:var(--muted)">Aucun envoi encore.</td></tr>';
+
+  // Graphique de croissance des contacts (historique quotidien)
+  try {
+    const { history = [] } = await api('/history');
+    const pts = history.slice(-30);
+    const chart = $('#growth-chart');
+    const summ = $('#growth-summary');
+    if (!chart) return;
+    if (pts.length) {
+      const max = Math.max(1, ...pts.map((p) => p.total || 0));
+      const gain = (pts[pts.length - 1].total || 0) - (pts[0].total || 0);
+      if (summ) summ.textContent = `${pts[pts.length - 1].total} contacts · +${gain} sur ${pts.length} jour(s)`;
+      chart.innerHTML = pts.map((p) => {
+        const h = Math.max(3, Math.round(((p.total || 0) / max) * 100));
+        return `<div class="gcol" title="${esc(p.date)} : ${p.total} contacts (+${p.added || 0} ce jour)">
+          <div class="gbar" style="height:${h}%"><span>${p.total}</span></div>
+          <div class="glabel">${esc((p.date || '').slice(5))}</div></div>`;
+      }).join('');
+    } else {
+      if (summ) summ.textContent = '';
+      chart.innerHTML = '<p class="hint">L\'historique se remplit à partir d\'aujourd\'hui — reviens demain pour voir la courbe grandir. 🌱</p>';
+    }
+  } catch (_) {}
 }
 
 // ================= AUTOMATISATION =================

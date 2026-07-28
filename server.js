@@ -905,6 +905,21 @@ async function keepDeliverable(items) {
   return out;
 }
 
+// Enregistre le total de contacts du jour (un point par jour) pour tracer la
+// courbe de croissance. Met à jour l'entrée du jour si elle existe déjà.
+function recordDailyCount(settings, total, added) {
+  settings.history = Array.isArray(settings.history) ? settings.history : [];
+  const today = todayStr();
+  const last = settings.history[settings.history.length - 1];
+  if (last && last.date === today) {
+    last.total = total;
+    last.added = (last.added || 0) + (added || 0);
+  } else {
+    settings.history.push({ date: today, total, added: added || 0 });
+  }
+  if (settings.history.length > 400) settings.history = settings.history.slice(-400);
+}
+
 // Ajoute des garages à la liste de contacts (dédoublonnage par courriel). Mute `contacts`.
 function importItems(items, contacts) {
   const byEmail = new Map(contacts.filter((c) => c.email).map((c) => [c.email, c]));
@@ -1138,6 +1153,8 @@ async function runAutoOnce(force = false) {
         .filter(Boolean)
         .join(' · '),
     };
+    // Historique quotidien du nombre de contacts (graphique de croissance)
+    recordDailyCount(settings, contacts.length, totalAdded);
     await save('sends', sends);
     await save('contacts', contacts);
     await save('settings', settings);
@@ -1802,6 +1819,12 @@ async function handleApi(req, res, url) {
     return sendJSON(res, 200, dl);
   }
 
+  // --- Historique quotidien du nombre de contacts (graphique de croissance) ---
+  if (p === '/api/history' && method === 'GET') {
+    const settings = await load('settings');
+    return sendJSON(res, 200, { history: Array.isArray(settings.history) ? settings.history : [] });
+  }
+
   // --- État général ---
   if (p === '/api/state' && method === 'GET') {
     const [settings, contacts, sends] = await Promise.all([
@@ -2263,3 +2286,20 @@ setInterval(() => checkAllDeliverabilityAndAlert().catch(() => {}), 12 * 60 * 60
 // Gardien de campagne : vérifie aux 3 h que les envois se font, alerte sinon.
 setTimeout(() => checkCampaignHealthAndAlert().catch(() => {}), 90000);
 setInterval(() => checkCampaignHealthAndAlert().catch(() => {}), 3 * 60 * 60 * 1000);
+
+// Point de départ de l'historique au démarrage (pour que le graphique ait tout
+// de suite une valeur, sans attendre le prochain ratissage), puis chaque jour.
+function snapshotHistory() {
+  forEachCampaign(async () => {
+    try {
+      const settings = await load('settings');
+      const contacts = await load('contacts');
+      recordDailyCount(settings, contacts.length, 0);
+      await save('settings', settings);
+    } catch {
+      /* ignore */
+    }
+  });
+}
+setTimeout(snapshotHistory, 15000);
+setInterval(snapshotHistory, 6 * 60 * 60 * 1000);
