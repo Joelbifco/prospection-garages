@@ -879,6 +879,32 @@ async function searchGarages(zone, opts = {}) {
   return searchGaragesOSM(zone, withSearch);
 }
 
+// Ne garde que les adresses dont le domaine peut RECEVOIR du courriel (a un MX) —
+// évite d'ajouter des adresses invalides qui rebondiraient et abîmeraient la
+// réputation. Résultat mis en cache par domaine (une seule vérif DNS par domaine).
+const mxCache = new Map();
+async function domainDeliverable(domain) {
+  if (!domain) return false;
+  if (mxCache.has(domain)) return mxCache.get(domain);
+  let ok = false;
+  try {
+    ok = (await dns.resolveMx(domain)).length > 0;
+  } catch {
+    ok = false;
+  }
+  mxCache.set(domain, ok);
+  return ok;
+}
+async function keepDeliverable(items) {
+  const out = [];
+  for (const it of items) {
+    const email = (it.email || '').trim().toLowerCase();
+    const domain = email.split('@')[1];
+    if (domain && (await domainDeliverable(domain))) out.push(it);
+  }
+  return out;
+}
+
 // Ajoute des garages à la liste de contacts (dédoublonnage par courriel). Mute `contacts`.
 function importItems(items, contacts) {
   const byEmail = new Map(contacts.filter((c) => c.email).map((c) => [c.email, c]));
@@ -1034,7 +1060,7 @@ async function runAutoOnce(force = false) {
             scrape: auto.scrape !== false,
             businessCats: cat ? [cat] : undefined,
           });
-          const r = importItems(list.filter((g) => g.email), contacts);
+          const r = importItems(await keepDeliverable(list.filter((g) => g.email)), contacts);
           totalAdded += r.added;
           searched.push(`${zone}${cat ? ' [' + cat + ']' : ''} (+${r.added})`);
         } catch (e) {
@@ -1663,6 +1689,72 @@ async function checkAllDeliverabilityAndAlert() {
 }
 
 // ---------------------------------------------------------------------------
+//  Gardien de campagne : prévient par courriel si une campagne en mode envoi
+//  s'arrête (n'a pas tourné aujourd'hui) ou si tous ses envois échouent.
+// ---------------------------------------------------------------------------
+async function notifyCampaignProblem(campaign, message) {
+  const gset = await firstWorkingSmtp();
+  if (!gset) return;
+  const to = (gset.auto?.notifyEmail || 'ventes@bifco.shop').trim();
+  const transport = makeTransport(gset);
+  const fromLine = gset.from?.name ? `"${gset.from.name}" <${gset.from.email}>` : gset.from?.email;
+  await transport.sendMail({
+    from: fromLine,
+    to,
+    subject: `⚠️ Problème d'envoi — campagne « ${campaign.name} »`,
+    text:
+      'Bonjour,\n\n' +
+      `Le gardien a détecté un problème avec l'envoi automatique de la campagne « ${campaign.name} » :\n\n` +
+      '  • ' +
+      message +
+      '\n\nÀ vérifier : le serveur tourne-t-il ? Le compte courriel de la campagne est-il toujours valide ?\n\n' +
+      'Ouvre ton app : http://137.184.167.254:3000\n\n' +
+      '— Gardien de campagne',
+  });
+}
+
+async function checkCampaignHealthAndAlert() {
+  const now = new Date();
+  const dow = now.getDay();
+  const hour = now.getHours();
+  for (const c of CAMPAIGNS) {
+    await campaignCtx.run(c.id, async () => {
+      const settings = await load('settings');
+      const auto = settings.auto || {};
+      if (!auto.enabled || auto.findOnly) return; // seulement les campagnes qui envoient
+      const isWeekday = dow >= 1 && dow <= 5;
+      const sendHour = Number(auto.sendHour ?? 8);
+      const lr = auto.lastResult;
+      let problem = null;
+      if (isWeekday && hour >= sendHour + 4 && auto.lastRunDate !== todayStr()) {
+        problem = "L'envoi automatique n'a pas tourné aujourd'hui (serveur arrêté ou app fermée ?).";
+      } else if (
+        lr &&
+        typeof lr.at === 'string' &&
+        lr.at.slice(0, 10) === todayStr() &&
+        (lr.sent || 0) === 0 &&
+        (lr.failed || 0) > 0
+      ) {
+        problem = `Tous les envois du jour ont échoué (${lr.failed}) — le compte courriel a peut-être un souci.`;
+      }
+      const sig = problem ? todayStr() + '|' + problem : '';
+      if (problem && sig !== (auto.healthSig || '')) {
+        try {
+          await notifyCampaignProblem(c, problem);
+          settings.auto.healthSig = sig;
+          await save('settings', settings);
+        } catch {
+          /* réessaiera */
+        }
+      } else if (!problem && auto.healthSig) {
+        settings.auto.healthSig = '';
+        await save('settings', settings);
+      }
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 //  Routes API
 // ---------------------------------------------------------------------------
 async function handleApi(req, res, url) {
@@ -1889,7 +1981,7 @@ async function handleApi(req, res, url) {
   if (p === '/api/contacts/import' && method === 'POST') {
     const { items = [] } = await readBody(req);
     const contacts = await load('contacts');
-    const { added, skipped } = importItems(items, contacts);
+    const { added, skipped } = importItems(await keepDeliverable(items), contacts);
     await save('contacts', contacts);
     return sendJSON(res, 200, { added, skipped, total: contacts.length });
   }
@@ -2167,3 +2259,7 @@ setInterval(() => forEachCampaign(() => checkReplies()), 30 * 60 * 1000);
 // tout nouveau problème — pour toutes les adresses, présentes et futures.
 setTimeout(() => checkAllDeliverabilityAndAlert().catch(() => {}), 60000);
 setInterval(() => checkAllDeliverabilityAndAlert().catch(() => {}), 12 * 60 * 60 * 1000);
+
+// Gardien de campagne : vérifie aux 3 h que les envois se font, alerte sinon.
+setTimeout(() => checkCampaignHealthAndAlert().catch(() => {}), 90000);
+setInterval(() => checkCampaignHealthAndAlert().catch(() => {}), 3 * 60 * 60 * 1000);
