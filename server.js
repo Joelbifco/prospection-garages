@@ -107,7 +107,7 @@ migrateToSyncIfNeeded();
 // ---------------------------------------------------------------------------
 const CAMPAIGNS = [
   { id: 'garages', name: '🔧 Garages', noun: 'garage', nounPl: 'garages', title: 'Prospection Garages' },
-  { id: 'moteurs', name: '⚙️ Entreprises (Montréal)', noun: 'entreprise', nounPl: 'entreprises', title: 'Prospection Entreprises — Montréal', businesses: true },
+  { id: 'moteurs', name: '⚙️ Entreprises Montréal 4', noun: 'entreprise', nounPl: 'entreprises', title: 'Prospection Entreprises Montréal 4', businesses: true },
   { id: 'quebec', name: '⚙️ Entreprises (Québec)', noun: 'entreprise', nounPl: 'entreprises', title: 'Prospection Entreprises — Québec', businesses: true },
 ];
 const DATA_KEYS = ['settings', 'contacts', 'templates', 'sends', 'replies', 'bounces'];
