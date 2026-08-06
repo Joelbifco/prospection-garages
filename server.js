@@ -13,6 +13,17 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { promises as dns } from 'node:dns';
+
+// Filet de sécurité : un serveur qui tourne 24/7 ne doit JAMAIS planter à cause
+// d'une seule réponse HTTP malformée (on scrape des milliers de sites web au
+// hasard) ou d'un timeout de connexion IMAP. On journalise et on continue —
+// sinon chaque site bizarre fait planter l'app et l'accumulation ne finit jamais.
+process.on('uncaughtException', (err) => {
+  console.error('⚠️  Exception non gérée (ignorée, serveur maintenu en vie) :', err?.message || err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('⚠️  Rejet de promesse non géré (ignoré) :', err?.message || err);
+});
 import nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
@@ -1244,6 +1255,7 @@ async function checkReplies() {
   const port = Number(settings.imap?.port) || 993;
 
   const client = new ImapFlow({ host, port, secure: true, auth: { user, pass }, logger: false });
+  client.on('error', () => {}); // timeout/déconnexion IMAP : on ignore, ne pas planter
   const [contacts, replies, bounces] = await Promise.all([
     load('contacts'),
     load('replies'),
