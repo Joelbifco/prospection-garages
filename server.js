@@ -1987,6 +1987,16 @@ async function handleApi(req, res, url) {
     if (body.smtp && (body.smtp.pass === '********' || body.smtp.pass === undefined)) {
       next.smtp.pass = cur.smtp.pass;
     }
+    // Ne jamais effacer l'adresse d'envoi (smtp.user / from.email) par du vide
+    // quand une adresse existe déjà : le formulaire Réglages n'est rempli qu'au
+    // clic sur l'onglet, donc un enregistrement du seul mot de passe (champ
+    // adresse vide à l'écran) blanchirait l'adresse. On la conserve.
+    if (body.smtp && !String(body.smtp.user || '').trim() && cur.smtp && cur.smtp.user) {
+      next.smtp.user = cur.smtp.user;
+    }
+    if (body.from && !String(body.from.email || '').trim() && cur.from && cur.from.email) {
+      next.from.email = cur.from.email;
+    }
     // Idem pour la clé Google (masque = on garde l'existante)
     if (body.googleApiKey === '********' || body.googleApiKey === undefined) {
       next.googleApiKey = cur.googleApiKey || '';
