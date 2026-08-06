@@ -432,9 +432,14 @@ async function fetchWithTimeout(url, opts = {}, ms = 15000) {
 }
 
 async function geocode(zone) {
+  // Toutes nos zones sont au Québec. Sans cette précision, Nominatim renvoie
+  // parfois une ville homonyme en France (Laval, Verdun, Longueuil…) et on
+  // ratisse alors des entreprises françaises. On force donc le pays (Canada)
+  // et on ajoute « Québec, Canada » aux noms qui ne le précisent pas déjà.
+  const q = /(qu[ée]bec|canada)/i.test(zone) ? zone : zone + ', Québec, Canada';
   const url =
-    'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
-    encodeURIComponent(zone);
+    'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ca&q=' +
+    encodeURIComponent(q);
   const r = await fetchWithTimeout(url, {}, 15000);
   if (!r.ok) throw new Error('Géocodage indisponible (Nominatim ' + r.status + ')');
   const arr = await r.json();
