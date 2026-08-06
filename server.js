@@ -116,10 +116,29 @@ migrateToSyncIfNeeded();
 //  Campagnes : plusieurs sections indépendantes dans la même app.
 //  Chaque campagne a son propre dossier de données (contacts, réglages, etc.).
 // ---------------------------------------------------------------------------
+// 13 campagnes : Garages + 3 villes (Montréal, Québec, Gatineau) × 4 niches
+// (auto, construction, transport, commerce). Chaque campagne = 1 ville + 1 niche
+// + 1 adresse d'envoi (assignée dans ses réglages). Les niches ne se chevauchent
+// pas : chaque campagne accumule ses propres contacts, d'un type d'entreprise
+// différent. Les ids « moteurs » et « quebec » sont réutilisés (Montréal Auto et
+// Québec Auto) pour conserver les contacts déjà accumulés.
 const CAMPAIGNS = [
   { id: 'garages', name: '🔧 Garages', noun: 'garage', nounPl: 'garages', title: 'Prospection Garages' },
-  { id: 'moteurs', name: '⚙️ Entreprises Montréal 4', noun: 'entreprise', nounPl: 'entreprises', title: 'Prospection Entreprises Montréal 4', businesses: true },
-  { id: 'quebec', name: '⚙️ Entreprises Québec 4', noun: 'entreprise', nounPl: 'entreprises', title: 'Prospection Entreprises Québec 4', businesses: true },
+
+  { id: 'moteurs', name: '🚗 Montréal — Auto & garages', noun: 'entreprise', nounPl: 'entreprises', title: 'Montréal — Auto & garages', businesses: true, niche: 'auto', city: 'montreal' },
+  { id: 'mtl_construction', name: '🏗️ Montréal — Construction & métiers', noun: 'entreprise', nounPl: 'entreprises', title: 'Montréal — Construction & métiers', businesses: true, niche: 'construction', city: 'montreal' },
+  { id: 'mtl_transport', name: '🚛 Montréal — Transport & camionnage', noun: 'entreprise', nounPl: 'entreprises', title: 'Montréal — Transport & camionnage', businesses: true, niche: 'transport', city: 'montreal' },
+  { id: 'mtl_commerce', name: '🛒 Montréal — Commerces & restaurants', noun: 'entreprise', nounPl: 'entreprises', title: 'Montréal — Commerces & restaurants', businesses: true, niche: 'commerce', city: 'montreal' },
+
+  { id: 'quebec', name: '🚗 Québec — Auto & garages', noun: 'entreprise', nounPl: 'entreprises', title: 'Québec — Auto & garages', businesses: true, niche: 'auto', city: 'quebec' },
+  { id: 'qc_construction', name: '🏗️ Québec — Construction & métiers', noun: 'entreprise', nounPl: 'entreprises', title: 'Québec — Construction & métiers', businesses: true, niche: 'construction', city: 'quebec' },
+  { id: 'qc_transport', name: '🚛 Québec — Transport & camionnage', noun: 'entreprise', nounPl: 'entreprises', title: 'Québec — Transport & camionnage', businesses: true, niche: 'transport', city: 'quebec' },
+  { id: 'qc_commerce', name: '🛒 Québec — Commerces & restaurants', noun: 'entreprise', nounPl: 'entreprises', title: 'Québec — Commerces & restaurants', businesses: true, niche: 'commerce', city: 'quebec' },
+
+  { id: 'gat_auto', name: '🚗 Gatineau — Auto & garages', noun: 'entreprise', nounPl: 'entreprises', title: 'Gatineau — Auto & garages', businesses: true, niche: 'auto', city: 'gatineau' },
+  { id: 'gat_construction', name: '🏗️ Gatineau — Construction & métiers', noun: 'entreprise', nounPl: 'entreprises', title: 'Gatineau — Construction & métiers', businesses: true, niche: 'construction', city: 'gatineau' },
+  { id: 'gat_transport', name: '🚛 Gatineau — Transport & camionnage', noun: 'entreprise', nounPl: 'entreprises', title: 'Gatineau — Transport & camionnage', businesses: true, niche: 'transport', city: 'gatineau' },
+  { id: 'gat_commerce', name: '🛒 Gatineau — Commerces & restaurants', noun: 'entreprise', nounPl: 'entreprises', title: 'Gatineau — Commerces & restaurants', businesses: true, niche: 'commerce', city: 'gatineau' },
 ];
 const DATA_KEYS = ['settings', 'contacts', 'templates', 'sends', 'replies', 'bounces'];
 
@@ -134,6 +153,11 @@ function currentCampaign() {
 function isBusinessCampaign(id = currentCampaign()) {
   const c = CAMPAIGNS.find((x) => x.id === id);
   return !!(c && c.businesses);
+}
+// La niche (secteur) ciblée par la campagne courante, ex. 'auto', 'construction'.
+function campaignNiche(id = currentCampaign()) {
+  const c = CAMPAIGNS.find((x) => x.id === id);
+  return (c && c.niche) || null;
 }
 function fileFor(campaign, key) {
   return path.join(DATA_DIR, campaign, key + '.json');
@@ -258,20 +282,56 @@ const MOTEURS_QUERIES = [
   'location de véhicules',
 ];
 
+// Zones ratissées par ville (noms sans accents pour le géocodage).
+const ZONES_PAR_VILLE = {
+  montreal: [
+    'Montreal', 'Laval', 'Longueuil', 'Brossard', 'Saint-Laurent', 'LaSalle',
+    'Verdun', 'Lachine', 'Anjou', 'Montreal-Nord', 'Saint-Leonard',
+    'Pointe-aux-Trembles', 'Dollard-des-Ormeaux', 'Pointe-Claire', 'Dorval',
+    'Repentigny', 'Terrebonne', 'Mascouche', 'Boucherville', 'Saint-Hubert',
+    'Chateauguay', 'Vaudreuil-Dorion', 'Blainville', 'Saint-Eustache',
+  ],
+  quebec: [
+    'Quebec', 'Levis', 'Beauport', 'Charlesbourg', 'Sainte-Foy', 'Loretteville',
+    'Val-Belair', 'Cap-Rouge', 'Sillery', 'Vanier', 'Ancienne-Lorette',
+    'Saint-Augustin-de-Desmaures', 'Boischatel', 'Sainte-Brigitte-de-Laval',
+    'Stoneham', 'Shannon', 'Pont-Rouge', 'Donnacona',
+  ],
+  gatineau: [
+    'Gatineau', 'Hull', 'Aylmer', 'Buckingham', 'Masson-Angers', 'Chelsea',
+    'Cantley', 'Val-des-Monts', 'L-Ange-Gardien', 'Thurso', 'Papineauville',
+    'Montebello', 'Wakefield', 'Gracefield', 'Maniwaki', 'Ripon', 'Low',
+  ],
+};
+
 function defaultSettingsFor(campaign) {
   const s = structuredClone(DEFAULTS.settings);
+  const c = CAMPAIGNS.find((x) => x.id === campaign);
   if (isBusinessCampaign(campaign)) {
     // Campagne « entreprises » : recherche large + accumulation d'abord (findOnly),
-    // sans clé Google (recherche gratuite OpenStreetMap).
+    // sans clé Google (recherche gratuite OpenStreetMap). Chaque campagne a UNE
+    // niche fixe (définie dans CAMPAIGNS) et ratisse les zones de sa ville.
     s.auto.findOnly = true; // on accumule d'abord ; l'envoi se branche quand l'adresse est prête
     s.auto.smallOnly = false; // toutes les entreprises, pas seulement les petits garages
     s.auto.radiusKm = 12; // rayon léger => recherche gratuite rapide et fiable
+    s.auto.accumulateZonesPerDay = 8; // ratisse 8 zones/jour => max de contacts
+    s.auto.enabled = true; // le planificateur accumule aux 15 min
     s.auto.search = { queries: MOTEURS_QUERIES, includedType: '' };
+    s.googleApiKey = ''; // recherche GRATUITE (OpenStreetMap) — aucune limite
+    // Zones de la ville de la campagne.
+    s.auto.zones = (c && ZONES_PAR_VILLE[c.city]) ? ZONES_PAR_VILLE[c.city].slice() : [];
+    // Les leads (réponses positives) arrivent toujours dans la boîte principale.
+    s.replyNotifyEmail = 'ventes@bifco.shop';
+    s.auto.notifyEmail = 'ventes@bifco.shop';
+    // Serveurs Hostinger par défaut ; l'adresse d'envoi propre à la campagne se
+    // branche plus tard dans Réglages (l'accumulation n'en a pas besoin).
+    s.smtp = { host: 'smtp.hostinger.com', port: 465, secure: true, user: '', pass: '' };
+    s.imap = { host: 'imap.hostinger.com', port: 993 };
+    s.from = { name: 'Bifco — Moteurs et Transmissions', email: '' };
     if (campaign === 'moteurs') {
-      // Adresse d'envoi propre à la campagne Montréal.
-      s.smtp = { host: 'smtp.hostinger.com', port: 465, secure: true, user: 'moteurs@bifcobifco.com', pass: '' };
-      s.imap = { host: 'imap.hostinger.com', port: 993 };
-      s.from = { name: 'Bifco — Moteurs et Transmissions', email: 'moteurs@bifcobifco.com' };
+      // Adresse d'envoi déjà connue pour Montréal Auto.
+      s.smtp.user = 'moteurs@bifcobifco.com';
+      s.from.email = 'moteurs@bifcobifco.com';
     }
   } else {
     s.auto.search = { queries: GARAGE_QUERIES, includedType: 'car_repair' };
@@ -414,26 +474,59 @@ out center tags;`;
 // Toutes les grandes familles d'entreprises d'OpenStreetMap. L'automatisation
 // en ratisse UNE par passage (léger et fiable) et tourne dessus au fil des
 // jours pour tout couvrir. La recherche manuelle en prend quelques-unes.
-const BUSINESS_CATS = ['shop', 'office', 'craft', 'amenity', 'tourism', 'healthcare', 'leisure', 'industrial'];
+// Niches d'entreprises : chaque campagne cible UN secteur précis (zéro
+// chevauchement entre niches). Filtres OpenStreetMap explicites par niche.
+const NICHES = {
+  auto: {
+    label: 'Auto & garages',
+    filters: [
+      '["shop"~"^(car|car_repair|car_parts|tyres|motorcycle|motorcycle_repair|car_rental)$"]',
+      '["craft"="car_repair"]',
+      '["amenity"~"^(car_rental|car_wash)$"]',
+    ],
+  },
+  construction: {
+    label: 'Construction & métiers',
+    filters: [
+      '["craft"~"^(builder|carpenter|electrician|plumber|roofer|hvac|painter|metal_construction|scaffolder|tiler|plasterer|insulation|stonemason|gardener|joiner|glaziery|floorer|handyman|window_construction|sawmill)$"]',
+      '["office"="construction_company"]',
+      '["shop"~"^(hardware|doityourself|trade|building_materials|paint|flooring|kitchen|bathroom_furnishing|fireplace|garden_centre)$"]',
+    ],
+  },
+  transport: {
+    label: 'Transport & camionnage',
+    filters: [
+      '["office"~"^(logistics|moving_company)$"]',
+      '["amenity"="driving_school"]',
+      '["shop"="trade"]',
+    ],
+  },
+  commerce: {
+    label: 'Commerces & restaurants',
+    filters: [
+      '["amenity"~"^(restaurant|cafe|bar|fast_food|pub|ice_cream|food_court|biergarten)$"]',
+      '["shop"~"^(supermarket|convenience|bakery|butcher|greengrocer|clothes|shoes|jewelry|furniture|electronics|mobile_phone|florist|beauty|hairdresser|optician|books|toys|sports|pet|gift|deli|confectionery|department_store|variety_store|cosmetics|chemist|newsagent|stationery|pastry|wine|alcohol|seafood|cheese|coffee|tea|chocolate)$"]',
+    ],
+  },
+};
 
-async function overpassBusinesses(lat, lon, radiusKm, cats) {
+async function overpassBusinesses(lat, lon, radiusKm, nicheKey) {
   // Plafond à 12 km : au-delà, la requête sur une ville dense devient trop
   // lourde pour l'annuaire (expiration). Les zones qui se chevauchent couvrent
   // quand même toute la région.
   const R = Math.round(Math.max(1, Math.min(12, radiusKm)) * 1000);
   const A = `(around:${R},${lat},${lon})`;
-  // Catégories explicites (l'annuaire les traite bien plus vite qu'une regex).
-  // On ne garde que celles ayant un site OU un courriel publié (donc joignables).
-  const list = cats && cats.length ? cats : ['shop', 'office', 'craft'];
+  // Filtres de la niche (sinon large par défaut). On ne garde que les
+  // entreprises ayant un site OU un courriel publié (donc joignables).
+  const niche = NICHES[nicheKey];
+  const filters = niche ? niche.filters : ['["shop"]', '["office"]', '["craft"]'];
   const clauses = [];
-  for (const cat of list) {
+  for (const f of filters) {
     for (const has of ['website', 'contact:website', 'email', 'contact:email']) {
-      clauses.push(`  nwr["${cat}"]["${has}"]${A};`);
+      clauses.push(`  nwr${f}["${has}"]${A};`);
     }
   }
   const q = `[out:json][timeout:120];\n(\n${clauses.join('\n')}\n);\nout center tags 3000;`;
-  // Délai court par miroir : on abandonne vite un miroir lent pour essayer le
-  // suivant (5 miroirs de secours). Une requête à une seule catégorie est légère.
   return runOverpass(q, 45000);
 }
 
@@ -779,7 +872,7 @@ async function searchGaragesOSM(zone, opts = {}) {
   // les garages (avec le filtre « petits garages » habituel).
   const businesses = isBusinessCampaign();
   if (businesses) {
-    const raw = await overpassBusinesses(geo.lat, geo.lon, Number(opts.radiusKm) || 15, opts.businessCats);
+    const raw = await overpassBusinesses(geo.lat, geo.lon, Number(opts.radiusKm) || 15, opts.niche || campaignNiche());
     const list = raw.map(normalizeBusiness);
     const r = await postProcessGarages(list, zone.trim(), { ...opts, smallOnly: false });
     return { zone: zone.trim(), center: geo, ...r, source: 'OpenStreetMap' };
@@ -1081,43 +1174,38 @@ async function runAutoOnce(force = false) {
     let quotaHit = false;
     if (zones.length) {
       const perDay = Math.max(1, Math.min(zones.length, Number(auto.accumulateZonesPerDay ?? 4)));
-      // Pour Entreprises : on tourne aussi sur les familles d'entreprises (UNE par
-      // passage — léger et fiable) en parcourant les paires (zone × catégorie).
-      const isBiz = isBusinessCampaign();
-      const cats = isBiz ? BUSINESS_CATS : [null];
-      const combos = zones.length * cats.length;
-      let ci = auto.comboIndex || 0;
+      // Chaque campagne a UNE niche fixe (appliquée dans la recherche) : on
+      // parcourt simplement ses zones, l'une après l'autre.
+      let zi = auto.zoneIndex || 0;
       for (let k = 0; k < perDay; k++) {
-        const zone = zones[ci % zones.length];
-        const cat = cats[Math.floor(ci / zones.length) % cats.length];
-        ci++;
+        const zone = zones[zi % zones.length];
+        zi++;
         try {
           const { list } = await searchGarages(zone, {
             radiusKm: auto.radiusKm || 25,
             smallOnly: auto.smallOnly !== false,
             scrape: auto.scrape !== false,
-            businessCats: cat ? [cat] : undefined,
           });
           const r = importItems(await keepDeliverable(list.filter((g) => g.email)), contacts);
           totalAdded += r.added;
-          searched.push(`${zone}${cat ? ' [' + cat + ']' : ''} (+${r.added})`);
+          searched.push(`${zone} (+${r.added})`);
         } catch (e) {
           if (/quotidienne|429|RESOURCE_EXHAUSTED/i.test(e.message)) {
             quotaHit = true;
             searched.push(`${zone} (limite Google — reprend demain)`);
             break;
           }
-          searched.push(`${zone}${cat ? ' [' + cat + ']' : ''} (erreur)`);
+          searched.push(`${zone} (erreur)`);
         }
       }
-      settings.auto.comboIndex = ci % combos;
+      settings.auto.zoneIndex = zi % zones.length;
 
       // « Région épuisée » (campagnes trouver-seulement) : quand un tour complet
-      // de toutes les paires (zone × catégorie) n'ajoute plus aucun contact.
+      // de toutes les zones n'ajoute plus aucun nouveau contact.
       if (auto.findOnly) {
         settings.auto.cycleAdded = (settings.auto.cycleAdded || 0) + totalAdded;
         settings.auto.cycleZonesDone = (settings.auto.cycleZonesDone || 0) + perDay;
-        if (settings.auto.cycleZonesDone >= combos) {
+        if (settings.auto.cycleZonesDone >= zones.length) {
           const cycleAdded = settings.auto.cycleAdded;
           settings.auto.cycleZonesDone = 0;
           settings.auto.cycleAdded = 0;
