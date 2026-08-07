@@ -518,8 +518,9 @@ const NICHES = {
 async function overpassBusinesses(lat, lon, radiusKm, nicheKey) {
   // Plafond à 12 km : au-delà, la requête sur une ville dense devient trop
   // lourde pour l'annuaire (expiration). Les zones qui se chevauchent couvrent
-  // quand même toute la région.
-  const R = Math.round(Math.max(1, Math.min(12, radiusKm)) * 1000);
+  // quand même toute la région. Plafond porté à 45 km pour permettre l'expansion
+  // automatique du rayon quand une région à faible densité s'épuise.
+  const R = Math.round(Math.max(1, Math.min(45, radiusKm)) * 1000);
   const A = `(around:${R},${lat},${lon})`;
   // Filtres de la niche (sinon large par défaut). On ne garde que les
   // entreprises ayant un site OU un courriel publié (donc joignables).
@@ -1205,25 +1206,35 @@ async function runAutoOnce(force = false) {
       }
       settings.auto.zoneIndex = zi % zones.length;
 
-      // « Région épuisée » (campagnes trouver-seulement) : quand un tour complet
-      // de toutes les zones n'ajoute plus aucun nouveau contact.
-      if (auto.findOnly) {
-        settings.auto.cycleAdded = (settings.auto.cycleAdded || 0) + totalAdded;
-        settings.auto.cycleZonesDone = (settings.auto.cycleZonesDone || 0) + perDay;
-        if (settings.auto.cycleZonesDone >= zones.length) {
-          const cycleAdded = settings.auto.cycleAdded;
-          settings.auto.cycleZonesDone = 0;
-          settings.auto.cycleAdded = 0;
-          if (cycleAdded === 0 && contacts.length >= 25 && !settings.auto.harvestNotified) {
+      // « Région épuisée » : quand un tour complet de toutes les zones n'ajoute
+      // plus AUCUN nouveau contact, on ÉLARGIT automatiquement le rayon de
+      // recherche (par paliers de 8 km, jusqu'à 45 km). Ça permet de continuer à
+      // trouver des entreprises dans les régions à faible densité (Québec,
+      // Gatineau) au lieu de plafonner. Vaut pour toutes les campagnes actives.
+      settings.auto.cycleAdded = (settings.auto.cycleAdded || 0) + totalAdded;
+      settings.auto.cycleZonesDone = (settings.auto.cycleZonesDone || 0) + perDay;
+      if (settings.auto.cycleZonesDone >= zones.length) {
+        const cycleAdded = settings.auto.cycleAdded;
+        settings.auto.cycleZonesDone = 0;
+        settings.auto.cycleAdded = 0;
+        if (cycleAdded === 0) {
+          const cur = Number(settings.auto.radiusKm) || 12;
+          const MAX_RAYON = 45;
+          if (cur < MAX_RAYON) {
+            settings.auto.radiusKm = Math.min(MAX_RAYON, cur + 8); // on élargit la zone
+            settings.auto.harvestNotified = false;
+            searched.push(`région épuisée → rayon élargi à ${settings.auto.radiusKm} km`);
+          } else if (auto.findOnly && contacts.length >= 25 && !settings.auto.harvestNotified) {
+            // Rayon maximal atteint et toujours rien de neuf → vraiment épuisé.
             try {
               await notifyHarvestComplete(settings, contacts);
             } catch {
               /* notification échouée, on réessaiera */
             }
             settings.auto.harvestNotified = true;
-          } else if (cycleAdded > 0) {
-            settings.auto.harvestNotified = false;
           }
+        } else {
+          settings.auto.harvestNotified = false;
         }
       }
     }
