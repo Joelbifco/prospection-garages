@@ -485,32 +485,34 @@ const NICHES = {
   auto: {
     label: 'Auto & garages',
     filters: [
-      '["shop"~"^(car|car_repair|car_parts|tyres|motorcycle|motorcycle_repair|car_rental)$"]',
-      '["craft"="car_repair"]',
-      '["amenity"~"^(car_rental|car_wash)$"]',
+      '["shop"~"^(car|car_repair|car_parts|tyres|motorcycle|motorcycle_repair|motorcycle_parts|car_rental|truck|trailer|caravan|atv|snowmobile|boat|hgv|van|bicycle)$"]',
+      '["craft"~"^(car_repair|coachbuilder)$"]',
+      '["amenity"~"^(car_rental|car_wash|fuel|vehicle_inspection)$"]',
+      '["office"="car_leasing"]',
     ],
   },
   construction: {
     label: 'Construction & métiers',
     filters: [
-      '["craft"~"^(builder|carpenter|electrician|plumber|roofer|hvac|painter|metal_construction|scaffolder|tiler|plasterer|insulation|stonemason|gardener|joiner|glaziery|floorer|handyman|window_construction|sawmill)$"]',
-      '["office"="construction_company"]',
-      '["shop"~"^(hardware|doityourself|trade|building_materials|paint|flooring|kitchen|bathroom_furnishing|fireplace|garden_centre)$"]',
+      '["craft"~"^(builder|carpenter|electrician|plumber|roofer|hvac|painter|metal_construction|scaffolder|tiler|plasterer|insulation|stonemason|gardener|joiner|glaziery|floorer|handyman|window_construction|sawmill|door_construction|parquet_layer|chimney_sweeper|paver|well_drilling|blacksmith|locksmith|electronics|heating_engineer|dressmaker|caterer|elevator)$"]',
+      '["office"~"^(construction_company|architect|engineer|surveyor)$"]',
+      '["shop"~"^(hardware|doityourself|trade|building_materials|paint|flooring|kitchen|bathroom_furnishing|fireplace|garden_centre|doors|windows|tiles|swimming_pool|electrical|plumbing|carpet|bed|tool_hire|glaziery|fencing)$"]',
     ],
   },
   transport: {
     label: 'Transport & camionnage',
     filters: [
-      '["office"~"^(logistics|moving_company)$"]',
-      '["amenity"="driving_school"]',
-      '["shop"="trade"]',
+      '["office"~"^(logistics|moving_company|courier|forwarding|transport|freight)$"]',
+      '["amenity"~"^(driving_school|taxi)$"]',
+      '["shop"~"^(trade|storage_rental)$"]',
+      '["industrial"="warehouse"]',
     ],
   },
   commerce: {
     label: 'Commerces & restaurants',
     filters: [
-      '["amenity"~"^(restaurant|cafe|bar|fast_food|pub|ice_cream|food_court|biergarten)$"]',
-      '["shop"~"^(supermarket|convenience|bakery|butcher|greengrocer|clothes|shoes|jewelry|furniture|electronics|mobile_phone|florist|beauty|hairdresser|optician|books|toys|sports|pet|gift|deli|confectionery|department_store|variety_store|cosmetics|chemist|newsagent|stationery|pastry|wine|alcohol|seafood|cheese|coffee|tea|chocolate)$"]',
+      '["amenity"~"^(restaurant|cafe|bar|fast_food|pub|ice_cream|food_court|biergarten|pharmacy|veterinary|marketplace|nightclub|cinema)$"]',
+      '["shop"~"^(supermarket|convenience|bakery|butcher|greengrocer|clothes|shoes|jewelry|furniture|electronics|mobile_phone|florist|beauty|hairdresser|optician|books|toys|sports|pet|gift|deli|confectionery|department_store|variety_store|cosmetics|chemist|newsagent|stationery|pastry|wine|alcohol|seafood|cheese|coffee|tea|chocolate|mall|wholesale|general|kiosk|laundry|dry_cleaning|massage|tattoo|travel_agency|funeral_directors|photo|copyshop|outdoor|houseware|watches|music|musical_instrument|art|craft|hobby|games|video_games|farm|dairy|health_food|second_hand|charity|hearing_aids|medical_supply|tobacco|e-cigarette)$"]',
     ],
   },
 };
