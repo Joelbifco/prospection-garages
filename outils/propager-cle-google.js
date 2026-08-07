@@ -9,12 +9,22 @@
 //  Usage (sur le serveur) :
 //     node outils/propager-cle-google.js
 // ---------------------------------------------------------------------------
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '..', 'data');
+
+// Écriture ATOMIQUE : on écrit dans un fichier temporaire puis on le renomme.
+// Le renommage est instantané, donc le serveur qui lit settings.json ne peut
+// jamais tomber sur un fichier à demi-écrit (ce qui, autrement, réinitialisait
+// les réglages aux valeurs par défaut et effaçait le mot de passe SMTP).
+function writeAtomic(f, content) {
+  const tmp = f + '.tmp';
+  writeFileSync(tmp, content);
+  renameSync(tmp, f);
+}
 
 const src = path.join(DATA, 'garages', 'settings.json');
 if (!existsSync(src)) {
@@ -34,7 +44,7 @@ for (const camp of readdirSync(DATA)) {
   if (!existsSync(f)) continue;
   const s = JSON.parse(readFileSync(f, 'utf8'));
   s.googleApiKey = key;
-  writeFileSync(f, JSON.stringify(s, null, 2));
+  writeAtomic(f, JSON.stringify(s, null, 2));
   console.log('  ✅  clé Google appliquée à ' + camp);
   n++;
 }

@@ -1377,6 +1377,32 @@ async function checkReplies() {
     );
   };
 
+  // Courriel AUTOMATIQUE (absence/out-of-office, accusé de réception, autorépondeur,
+  // no-reply) : NE doit PAS compter comme une vraie réponse ni comme une piste, et ne
+  // doit pas faire passer le contact à « répondu » (il reste à contacter/relancer).
+  const isAutoReply = (subject, text, from, headers) => {
+    const s = (subject || '').toLowerCase();
+    const t = (text || '').toLowerCase().slice(0, 900);
+    const f = (from || '').toLowerCase();
+    const hget = (k) => {
+      try {
+        const v = headers && headers.get ? headers.get(k) : undefined;
+        return (typeof v === 'string' ? v : (v && v.value) || '').toString().toLowerCase();
+      } catch {
+        return '';
+      }
+    };
+    // En-têtes standards des messages automatiques (RFC 3834 + usage courant)
+    if (/auto-replied|auto-generated|auto-notified/.test(hget('auto-submitted'))) return true;
+    if (/auto_reply|bulk|junk|list/.test(hget('precedence'))) return true;
+    if (hget('x-autoreply') || hget('x-autorespond') || hget('x-auto-response-suppress')) return true;
+    if (/no-?reply@|donotreply@|do-not-reply@|ne-?pas-?repondre@|noreply@|postmaster@|mailer-daemon@/.test(f)) return true;
+    // Sujets / corps typiques (FR + EN)
+    const rx =
+      /(r[ée]ponse automatique|message automatique|réponse automatisée|absence du bureau|hors du bureau|je suis (actuellement )?absent|actuellement absent|en cong[ée]|en vacances|de retour le|out of office|out-of-office|automatic reply|auto[- ]?reply|autoresponder|accus[ée] de r[ée]ception|nous avons (bien )?re[çc]u votre|votre (courriel|message|demande) a (bien )?[ée]t[ée] re[çc]u|we (have )?received your (message|email|inquiry|request)|thank you for (contacting|your (email|message)|reaching out)|this is an automated|automated (response|message)|ne pas r[ée]pondre à ce (courriel|message)|do not reply to this)/i;
+    return rx.test(s) || rx.test(t);
+  };
+
   await client.connect();
   try {
     const lock = await client.getMailboxLock('INBOX');
@@ -1406,13 +1432,16 @@ async function checkReplies() {
       // Réponses
       for (const m of matches) {
         let text = '';
+        let headers = null;
         try {
           const full = await client.fetchOne(m.uid, { source: true }, { uid: true });
           const parsed = await simpleParser(full.source);
           text = (parsed.text || '').trim().slice(0, 4000);
+          headers = parsed.headers;
         } catch {
           /* pas de texte lisible */
         }
+        const auto = isAutoReply(m.env.subject, text, m.fromAddr, headers);
         const rec = {
           id: randomUUID(),
           contactId: m.contact.id,
@@ -1422,11 +1451,14 @@ async function checkReplies() {
           date: m.env.date ? new Date(m.env.date).toISOString() : new Date().toISOString(),
           text,
           messageId: m.messageId,
+          auto, // courriel automatique (absence, accusé de réception…) → ignoré comme piste
         };
         replies.push(rec);
-        if (!isRejection(text)) interesting.push({ ...rec, phone: m.contact.phone || '' });
+        // Un courriel automatique n'est PAS une piste et ne change PAS le statut du
+        // contact (il pourra donc être relancé normalement).
+        if (!auto && !isRejection(text)) interesting.push({ ...rec, phone: m.contact.phone || '' });
         const idx = contacts.findIndex((c) => c.id === m.contact.id);
-        if (idx >= 0 && contacts[idx].status !== 'partenaire') contacts[idx].status = 'répondu';
+        if (idx >= 0 && contacts[idx].status !== 'partenaire' && !auto) contacts[idx].status = 'répondu';
       }
       // Rebonds (mauvaises adresses) → marquer le garage « invalide »
       for (const bc of bounceCandidates) {
