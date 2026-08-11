@@ -91,23 +91,33 @@ try {
 etat.verifFaite = true;
 sauverEtat();
 
-if (!probleme) {
+// ==================== RAPPORT QUOTIDIEN (positif OU alerte) =================
+// On envoie un courriel TOUS les jours de semaine : « tout fonctionne » quand
+// ça va, ou une ALERTE quand rien n'est parti. Ainsi Joel a la confirmation
+// quotidienne que la prospection tourne (et il sait tout de suite si ça arrête).
+const estAlerte = Boolean(probleme);
+let sujet, corps;
+if (estAlerte) {
+  log('PROBLÈME — ' + probleme);
+  sujet = '⚠️ Prospection Bifco — AUCUN courriel envoyé aujourd\'hui';
+  corps =
+    `Alerte automatique de SIMA (${new Date().toLocaleString('fr-CA')}) :\n\n` +
+    probleme + '\n\n' +
+    'À vérifier : le serveur cloud tourne-t-il ? Le tunnel SMTP (SIMA) est-il actif ? ' +
+    'Les mots de passe Hostinger sont-ils bons ?\n\n' +
+    '— SIMA veille sur ta prospection.';
+} else {
   log(`OK — ${envoyesTotal} courriels envoyés aujourd'hui.`);
-  process.exit(0);
+  sujet = `✅ Prospection Bifco — tout fonctionne (${envoyesTotal} courriels envoyés)`;
+  corps =
+    `Rapport quotidien de SIMA (${new Date().toLocaleString('fr-CA')}) :\n\n` +
+    `✅ ${envoyesTotal} courriels ont été envoyés aujourd'hui par tes campagnes. ` +
+    'Tout fonctionne normalement — envois, relais et surveillance sont OK.\n\n' +
+    '— SIMA veille sur ta prospection.';
 }
 
-// =========================== ALERTE (3 canaux) =============================
-log('PROBLÈME — ' + probleme);
-const sujet = '⚠️ Prospection Bifco — AUCUN courriel envoyé aujourd\'hui';
-const corps =
-  `Alerte automatique de SIMA (${new Date().toLocaleString('fr-CA')}) :\n\n` +
-  probleme + '\n\n' +
-  'À vérifier : le serveur cloud tourne-t-il ? Le tunnel SMTP (SIMA) est-il actif ? ' +
-  'Les mots de passe Hostinger sont-ils bons ?\n\n' +
-  '— SIMA veille sur ta prospection.';
-
-// 1) Notification sur SIMA (bulle Windows)
-try {
+// 1) Notification sur SIMA (bulle Windows) — seulement en cas de PROBLÈME.
+if (estAlerte) try {
   const ps =
     'Add-Type -AssemblyName System.Windows.Forms;' +
     "$n=New-Object System.Windows.Forms.NotifyIcon;" +
