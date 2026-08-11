@@ -12,7 +12,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { promises as dns } from 'node:dns';
+import dnsMod, { promises as dns } from 'node:dns';
+
+// Le serveur (DigitalOcean) n'a PAS de route IPv6. Or smtp.hostinger.com /
+// imap.hostinger.com répondent parfois en IPv6 (via Cloudflare) : Node essaie
+// alors l'IPv6 en premier et l'envoi échoue avec « connect ENETUNREACH …:465 ».
+// On force la résolution DNS à préférer l'IPv4 → les connexions SMTP/IMAP passent.
+dnsMod.setDefaultResultOrder('ipv4first');
 
 // Filet de sécurité : un serveur qui tourne 24/7 ne doit JAMAIS planter à cause
 // d'une seule réponse HTTP malformée (on scrape des milliers de sites web au
@@ -788,6 +794,7 @@ function makeTransport(settings) {
     port: Number(s.port) || 587,
     secure: !!s.secure, // true = 465, false = 587 (STARTTLS)
     auth: { user: s.user, pass: s.pass },
+    family: 4, // forcer IPv4 (le serveur n'a pas d'IPv6 → sinon ENETUNREACH)
   });
 }
 
