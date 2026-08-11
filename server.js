@@ -1125,14 +1125,23 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
       error: '',
       at: new Date().toISOString(),
     };
-    try {
-      const info = await transport.sendMail({ from: fromLine, to: c.email, subject, text });
-      rec.messageId = info.messageId || '';
-      const idx = contacts.findIndex((x) => x.id === c.id);
-      if (idx >= 0 && contacts[idx].status === 'nouveau') contacts[idx].status = 'contacté';
-    } catch (e) {
-      rec.status = 'erreur';
-      rec.error = e.message;
+    // Envoi avec REPRISE automatique : si ça échoue (ex. petit blip du tunnel
+    // relais SIMA), on réessaie jusqu'à 3 fois avec une courte pause avant
+    // d'abandonner. Évite les 9/10 quand une connexion saute.
+    for (let essai = 1; essai <= 3; essai++) {
+      try {
+        const info = await transport.sendMail({ from: fromLine, to: c.email, subject, text });
+        rec.messageId = info.messageId || '';
+        rec.status = 'ok';
+        rec.error = '';
+        const idx = contacts.findIndex((x) => x.id === c.id);
+        if (idx >= 0 && contacts[idx].status === 'nouveau') contacts[idx].status = 'contacté';
+        break;
+      } catch (e) {
+        rec.status = 'erreur';
+        rec.error = e.message;
+        if (essai < 3) await sleep(2500); // pause avant de réessayer
+      }
     }
     if (rec.status === 'ok') alreadySent.add(c.id); // évite un doublon dans le même lot
     results.push(rec);
