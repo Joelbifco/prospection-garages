@@ -898,6 +898,11 @@ async function searchGaragesOSM(zone, opts = {}) {
   return { zone: zone.trim(), center: geo, ...r, source: 'OpenStreetMap' };
 }
 
+// Compteur de recherches Google (pour estimer le coût EN DIRECT : Google
+// facture ~0,032 $ US par recherche, mais le coût réel n'apparaît qu'après ~24h).
+// Réinitialisable via l'API pour suivre le coût d'un ratissage précis.
+let googleSearchCount = 0;
+
 // Recherche via Google Places (plus complet — nécessite une clé Google)
 async function googlePlacesGarages(lat, lon, radiusKm, apiKey, search) {
   const rKm = Number(radiusKm) || 15;
@@ -943,6 +948,7 @@ async function googlePlacesGarages(lat, lon, radiusKm, apiKey, search) {
         };
         if (includedType) body.includedType = includedType;
         if (pageToken) body.pageToken = pageToken;
+        googleSearchCount++; // suivi du coût (chaque requête ≈ 0,032 $ US)
         const r = await fetchWithTimeout(
           url,
           {
@@ -2036,6 +2042,16 @@ async function handleApi(req, res, url) {
   // --- Liste des campagnes (sections) ---
   if (p === '/api/campaigns' && method === 'GET') {
     return sendJSON(res, 200, { campaigns: CAMPAIGNS, current: currentCampaign() });
+  }
+
+  // --- Suivi du coût Google (compteur de recherches, estimation en direct) ---
+  if (p === '/api/google-usage' && method === 'GET') {
+    const PRIX = 0.032; // $ US par recherche (approx.)
+    return sendJSON(res, 200, { searches: googleSearchCount, estimatedUsd: +(googleSearchCount * PRIX).toFixed(2) });
+  }
+  if (p === '/api/google-usage/reset' && method === 'POST') {
+    googleSearchCount = 0;
+    return sendJSON(res, 200, { ok: true, searches: 0 });
   }
 
   // --- Gardien de livraison : état SPF/DKIM/DMARC/MX de la campagne courante ---
