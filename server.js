@@ -1266,6 +1266,46 @@ async function runAutoOnce(force = false) {
     }
     const ok = results.filter((r) => r.status === 'ok').length;
 
+    // === RELANCES ===
+    // S'il reste du quota du jour après les NOUVEAUX contacts, on envoie des
+    // RELANCES aux contacts déjà joints qui n'ont pas répondu (modèle « Relance »
+    // différent, une seule fois chacun, avec un délai entre chaque). Ça garde
+    // l'envoi productif quand une campagne n'a plus de nouveaux contacts (ex. en
+    // attendant le ratissage Google du début du mois).
+    let relancesOk = 0;
+    const resteQuota = Math.max(0, remaining - ok); // quota restant (envois réussis)
+    if (resteQuota > 0) {
+      const relTpls = templates.filter((t) => /relance/i.test(t.name || ''));
+      if (relTpls.length) {
+        const delaiMs = Math.max(0, Number(auto.relanceDelaiJours ?? 3)) * 86400000;
+        const now = Date.now();
+        const finis = new Set(['nouveau', 'répondu', 'invalide', 'partenaire']);
+        const cibles = [];
+        for (const c of contacts) {
+          if (!c.email || finis.has(c.status)) continue; // pas contacté, ou terminé
+          const envois = sends.filter((s) => s.status === 'ok' && s.contactId === c.id);
+          const nb = envois.length;
+          if (nb < 1 || nb > relTpls.length) continue; // 0 = pas contacté ; trop = relances finies
+          const relTpl = relTpls[nb - 1]; // 1 courriel reçu → 1re relance, etc.
+          if (!relTpl || envois.some((s) => s.templateId === relTpl.id)) continue;
+          const dernier = Math.max(...envois.map((s) => new Date(s.at).getTime()));
+          if (now - dernier < delaiMs) continue; // trop tôt pour relancer ce contact
+          cibles.push({ c, relTpl, dernier });
+        }
+        cibles.sort((a, b) => a.dernier - b.dernier); // les plus anciens d'abord
+        const parTpl = new Map();
+        for (const x of cibles.slice(0, resteQuota)) {
+          if (!parTpl.has(x.relTpl.id)) parTpl.set(x.relTpl.id, { tpl: x.relTpl, cs: [] });
+          parTpl.get(x.relTpl.id).cs.push(x.c);
+        }
+        for (const grp of parTpl.values()) {
+          const out = await deliverToContacts(settings, grp.tpl, grp.cs, sends, contacts);
+          relancesOk += out.results.filter((r) => r.status === 'ok').length;
+        }
+        if (relancesOk) searched.push(`${relancesOk} relance(s) envoyée(s)`);
+      }
+    }
+
     settings.auto = settings.auto || {};
 
     // Notification : plus aucun garage « nouveau » → tous contactés → temps des relances
@@ -1284,13 +1324,15 @@ async function runAutoOnce(force = false) {
     settings.auto.lastRunDate = todayStr();
     settings.auto.lastResult = {
       at: new Date().toISOString(),
-      sent: ok,
+      sent: ok + relancesOk,
+      relances: relancesOk,
       failed: results.length - ok,
       added: totalAdded,
       zonesSearched: searched,
       template: tpl.name,
       note: [
         `+${totalAdded} garages ajoutés à la réserve`,
+        relancesOk ? `${relancesOk} relance(s) envoyée(s)` : '',
         auto.findOnly ? 'mode « trouver seulement » (aucun envoi auto)' : '',
         !auto.findOnly && noSendToday ? 'week-end : pas d\'envoi' : '',
         quotaHit ? 'limite Google atteinte (reprend demain)' : '',
