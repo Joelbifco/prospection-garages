@@ -1182,214 +1182,221 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
 }
 
 // ---------------------------------------------------------------------------
-//  Automatisation quotidienne : trouver de nouveaux garages puis envoyer le quota
+//  Automatisation quotidienne — DEUX phases SÉPARÉES, dans cet ordre :
+//    1) ENVOI    (runSendOnce)   : RAPIDE (SMTP seulement). Tourne pour les 13
+//       campagnes AVANT tout ratissage, pour qu'aucune ne reste à 0 le matin.
+//    2) RATISSAGE (runHarvestOnce): LENT (Google/OSM). Tourne ENSUITE, sans
+//       jamais retarder l'envoi. Le verrou `autoBusy` ne protège QUE le ratissage
+//       (partie qui sature le CPU) ; l'envoi n'est donc plus jamais bloqué par lui.
 // ---------------------------------------------------------------------------
 let autoBusy = false;
-async function runAutoOnce(force = false) {
-  if (autoBusy) return { skipped: 'busy' };
+
+// --- Phase 1 : ENVOI du lot quotidien (nouveaux + relances) ----------------
+async function runSendOnce(force = false) {
   const settings = await load('settings');
   const auto = settings.auto || {};
   if (!force && !auto.enabled) return { skipped: 'disabled' };
-  if (!force && auto.lastRunDate === todayStr()) return { skipped: 'already-today' };
-  // Attendre l'heure choisie (ex. 8h), sauf en lancement manuel
+  if (!force && auto.lastSendDate === todayStr()) return { skipped: 'sent-today' };
   const sendHour = Number(auto.sendHour ?? 8);
   if (!force && new Date().getHours() < sendHour) return { skipped: 'before-hour' };
-  // Fin de semaine (samedi=6, dimanche=0) : on continue d'ACCUMULER des courriels,
-  // mais on n'ENVOIE pas (sauf lancement manuel).
-  const dow = new Date().getDay();
-  const noSendToday = !force && (auto.weekdaysOnly ?? true) && (dow === 0 || dow === 6);
+  const dow = new Date().getDay(); // 0=dim, 6=sam
+  if (!force && (auto.weekdaysOnly ?? true) && (dow === 0 || dow === 6)) return { skipped: 'weekend' };
+  if (auto.findOnly) return { skipped: 'find-only' };
 
   const templates = await load('templates');
   const tpl = templates.find((t) => t.id === auto.templateId) || templates[0];
   if (!tpl) return { skipped: 'no-template' };
 
+  const contacts = await load('contacts');
+  const sends = await load('sends');
+  const wu = warmupInfo(settings, sends);
+  const remaining = wu.enabled
+    ? wu.remaining
+    : Math.max(0, (Number(auto.dailyLimit) || 20) - countSentToday(sends));
+
+  const isNew = (c) => c.email && c.status === 'nouveau';
+  const targets = contacts.filter(isNew).slice(0, Math.max(0, remaining));
+  let results = [];
+  if (targets.length) {
+    const out = await deliverToContacts(settings, tpl, targets, sends, contacts);
+    results = out.results;
+  }
+  const ok = results.filter((r) => r.status === 'ok').length;
+
+  // === RELANCES ===
+  // S'il reste du quota du jour après les NOUVEAUX contacts, on envoie des
+  // RELANCES aux contacts déjà joints qui n'ont pas répondu (modèle « Relance »
+  // différent, une seule fois chacun, avec un délai entre chaque). Ça garde
+  // l'envoi productif quand une campagne n'a plus de nouveaux contacts.
+  let relancesOk = 0;
+  const resteQuota = Math.max(0, remaining - ok); // quota restant (envois réussis)
+  if (resteQuota > 0) {
+    const relTpls = templates.filter((t) => /relance/i.test(t.name || ''));
+    if (relTpls.length) {
+      const delaiMs = Math.max(0, Number(auto.relanceDelaiJours ?? 3)) * 86400000;
+      const now = Date.now();
+      const finis = new Set(['nouveau', 'répondu', 'invalide', 'partenaire']);
+      const cibles = [];
+      for (const c of contacts) {
+        if (!c.email || finis.has(c.status)) continue; // pas contacté, ou terminé
+        const envois = sends.filter((s) => s.status === 'ok' && s.contactId === c.id);
+        const nb = envois.length;
+        if (nb < 1 || nb > relTpls.length) continue; // 0 = pas contacté ; trop = relances finies
+        const relTpl = relTpls[nb - 1]; // 1 courriel reçu → 1re relance, etc.
+        if (!relTpl || envois.some((s) => s.templateId === relTpl.id)) continue;
+        const dernier = Math.max(...envois.map((s) => new Date(s.at).getTime()));
+        if (now - dernier < delaiMs) continue; // trop tôt pour relancer ce contact
+        cibles.push({ c, relTpl, dernier });
+      }
+      cibles.sort((a, b) => a.dernier - b.dernier); // les plus anciens d'abord
+      const parTpl = new Map();
+      for (const x of cibles.slice(0, resteQuota)) {
+        if (!parTpl.has(x.relTpl.id)) parTpl.set(x.relTpl.id, { tpl: x.relTpl, cs: [] });
+        parTpl.get(x.relTpl.id).cs.push(x.c);
+      }
+      for (const grp of parTpl.values()) {
+        const out = await deliverToContacts(settings, grp.tpl, grp.cs, sends, contacts);
+        relancesOk += out.results.filter((r) => r.status === 'ok').length;
+      }
+    }
+  }
+
+  // Notification : plus aucun garage « nouveau » → tous contactés → temps des relances
+  let allContactedNotified = auto.allContactedNotified;
+  const stillNew = contacts.filter(isNew).length;
+  if (stillNew === 0 && contacts.length >= 25 && !allContactedNotified) {
+    try {
+      await notifyAllContacted(settings, contacts, await load('replies'));
+      allContactedNotified = true;
+    } catch { /* notification échouée, on réessaiera au prochain passage */ }
+  } else if (stillNew > 0) {
+    allContactedNotified = false;
+  }
+
+  const envoiResult = {
+    at: new Date().toISOString(),
+    sent: ok + relancesOk,
+    relances: relancesOk,
+    failed: results.length - ok,
+    template: tpl.name,
+  };
+  await save('sends', sends);
+  await save('contacts', contacts);
+  // Sauvegarde SÛRE : relire la version COURANTE et n'écraser QUE nos champs
+  // (l'utilisateur a pu changer un réglage pendant l'envoi).
+  try {
+    const frais = await load('settings');
+    frais.auto = frais.auto || {};
+    frais.auto.lastSendDate = todayStr();
+    frais.auto.lastRunDate = todayStr(); // compat : surveillance + UI existantes
+    frais.auto.allContactedNotified = allContactedNotified;
+    frais.auto.lastResult = { ...(frais.auto.lastResult || {}), ...envoiResult };
+    await save('settings', frais);
+  } catch { /* on réessaiera au prochain passage */ }
+  return envoiResult;
+}
+
+// --- Phase 2 : RATISSAGE (accumulation de nouveaux contacts) ----------------
+async function runHarvestOnce(force = false) {
+  if (autoBusy) return { skipped: 'busy' };
+  const settings = await load('settings');
+  const auto = settings.auto || {};
+  if (!force && !auto.enabled) return { skipped: 'disabled' };
+  if (!force && auto.lastHarvestDate === todayStr()) return { skipped: 'harvested-today' };
+  const zones = Array.isArray(auto.zones) ? auto.zones.filter((z) => z && z.trim()) : [];
+  if (!zones.length) return { skipped: 'no-zones' };
+
   autoBusy = true;
   try {
-    let contacts = await load('contacts');
-    const sends = await load('sends');
-    const wu = warmupInfo(settings, sends);
-    const sendQuota =
-      noSendToday || auto.findOnly
-        ? 0
-        : wu.enabled
-        ? wu.remaining
-        : Math.max(0, (Number(auto.dailyLimit) || 20) - countSentToday(sends));
-
-    const isNew = (c) => c.email && c.status === 'nouveau';
-    const zones = Array.isArray(auto.zones) ? auto.zones.filter((z) => z && z.trim()) : [];
-
+    const contacts = await load('contacts');
     // ACCUMULATION : chaque jour, on ratisse PLUSIEURS zones et on garde TOUS les
     // courriels trouvés (pour bâtir une grande réserve), en s'arrêtant proprement
     // si Google atteint sa limite quotidienne.
     const searched = [];
     let totalAdded = 0;
     let quotaHit = false;
-    if (zones.length) {
-      const perDay = Math.max(1, Math.min(zones.length, Number(auto.accumulateZonesPerDay ?? 4)));
-      // Chaque campagne a UNE niche fixe (appliquée dans la recherche) : on
-      // parcourt simplement ses zones, l'une après l'autre.
-      let zi = auto.zoneIndex || 0;
-      for (let k = 0; k < perDay; k++) {
-        const zone = zones[zi % zones.length];
-        zi++;
-        try {
-          const { list } = await searchGarages(zone, {
-            radiusKm: auto.radiusKm || 25,
-            smallOnly: auto.smallOnly !== false,
-            scrape: auto.scrape !== false,
-          });
-          const r = importItems(await keepDeliverable(list.filter((g) => g.email)), contacts);
-          totalAdded += r.added;
-          searched.push(`${zone} (+${r.added})`);
-        } catch (e) {
-          if (/quotidienne|429|RESOURCE_EXHAUSTED/i.test(e.message)) {
-            quotaHit = true;
-            searched.push(`${zone} (limite Google — reprend demain)`);
-            break;
-          }
-          searched.push(`${zone} (erreur)`);
-        }
-      }
-      settings.auto.zoneIndex = zi % zones.length;
-
-      // « Région épuisée » : quand un tour complet de toutes les zones n'ajoute
-      // plus AUCUN nouveau contact, on ÉLARGIT automatiquement le rayon de
-      // recherche (par paliers de 8 km, jusqu'à 45 km). Ça permet de continuer à
-      // trouver des entreprises dans les régions à faible densité (Québec,
-      // Gatineau) au lieu de plafonner. Vaut pour toutes les campagnes actives.
-      settings.auto.cycleAdded = (settings.auto.cycleAdded || 0) + totalAdded;
-      settings.auto.cycleZonesDone = (settings.auto.cycleZonesDone || 0) + perDay;
-      if (settings.auto.cycleZonesDone >= zones.length) {
-        const cycleAdded = settings.auto.cycleAdded;
-        settings.auto.cycleZonesDone = 0;
-        settings.auto.cycleAdded = 0;
-        if (cycleAdded === 0) {
-          const cur = Number(settings.auto.radiusKm) || 12;
-          const MAX_RAYON = 45;
-          if (cur < MAX_RAYON) {
-            settings.auto.radiusKm = Math.min(MAX_RAYON, cur + 8); // on élargit la zone
-            settings.auto.harvestNotified = false;
-            searched.push(`région épuisée → rayon élargi à ${settings.auto.radiusKm} km`);
-          } else if (auto.findOnly && contacts.length >= 25 && !settings.auto.harvestNotified) {
-            // Rayon maximal atteint et toujours rien de neuf → vraiment épuisé.
-            try {
-              await notifyHarvestComplete(settings, contacts);
-            } catch {
-              /* notification échouée, on réessaiera */
-            }
-            settings.auto.harvestNotified = true;
-          }
-        } else {
-          settings.auto.harvestNotified = false;
-        }
-      }
-    }
-
-    const remaining = sendQuota;
-    const targets = contacts.filter(isNew).slice(0, Math.max(0, remaining));
-    let results = [];
-    if (targets.length) {
-      const out = await deliverToContacts(settings, tpl, targets, sends, contacts);
-      results = out.results;
-    }
-    const ok = results.filter((r) => r.status === 'ok').length;
-
-    // === RELANCES ===
-    // S'il reste du quota du jour après les NOUVEAUX contacts, on envoie des
-    // RELANCES aux contacts déjà joints qui n'ont pas répondu (modèle « Relance »
-    // différent, une seule fois chacun, avec un délai entre chaque). Ça garde
-    // l'envoi productif quand une campagne n'a plus de nouveaux contacts (ex. en
-    // attendant le ratissage Google du début du mois).
-    let relancesOk = 0;
-    const resteQuota = Math.max(0, remaining - ok); // quota restant (envois réussis)
-    if (resteQuota > 0) {
-      const relTpls = templates.filter((t) => /relance/i.test(t.name || ''));
-      if (relTpls.length) {
-        const delaiMs = Math.max(0, Number(auto.relanceDelaiJours ?? 3)) * 86400000;
-        const now = Date.now();
-        const finis = new Set(['nouveau', 'répondu', 'invalide', 'partenaire']);
-        const cibles = [];
-        for (const c of contacts) {
-          if (!c.email || finis.has(c.status)) continue; // pas contacté, ou terminé
-          const envois = sends.filter((s) => s.status === 'ok' && s.contactId === c.id);
-          const nb = envois.length;
-          if (nb < 1 || nb > relTpls.length) continue; // 0 = pas contacté ; trop = relances finies
-          const relTpl = relTpls[nb - 1]; // 1 courriel reçu → 1re relance, etc.
-          if (!relTpl || envois.some((s) => s.templateId === relTpl.id)) continue;
-          const dernier = Math.max(...envois.map((s) => new Date(s.at).getTime()));
-          if (now - dernier < delaiMs) continue; // trop tôt pour relancer ce contact
-          cibles.push({ c, relTpl, dernier });
-        }
-        cibles.sort((a, b) => a.dernier - b.dernier); // les plus anciens d'abord
-        const parTpl = new Map();
-        for (const x of cibles.slice(0, resteQuota)) {
-          if (!parTpl.has(x.relTpl.id)) parTpl.set(x.relTpl.id, { tpl: x.relTpl, cs: [] });
-          parTpl.get(x.relTpl.id).cs.push(x.c);
-        }
-        for (const grp of parTpl.values()) {
-          const out = await deliverToContacts(settings, grp.tpl, grp.cs, sends, contacts);
-          relancesOk += out.results.filter((r) => r.status === 'ok').length;
-        }
-        if (relancesOk) searched.push(`${relancesOk} relance(s) envoyée(s)`);
-      }
-    }
-
-    settings.auto = settings.auto || {};
-
-    // Notification : plus aucun garage « nouveau » → tous contactés → temps des relances
-    const stillNew = contacts.filter(isNew).length;
-    if (stillNew === 0 && contacts.length >= 25 && !settings.auto.allContactedNotified) {
+    const perDay = Math.max(1, Math.min(zones.length, Number(auto.accumulateZonesPerDay ?? 4)));
+    let zi = auto.zoneIndex || 0;
+    for (let k = 0; k < perDay; k++) {
+      const zone = zones[zi % zones.length];
+      zi++;
       try {
-        await notifyAllContacted(settings, contacts, await load('replies'));
-        settings.auto.allContactedNotified = true;
-      } catch {
-        /* notification échouée, on réessaiera au prochain passage */
+        const { list } = await searchGarages(zone, {
+          radiusKm: auto.radiusKm || 25,
+          smallOnly: auto.smallOnly !== false,
+          scrape: auto.scrape !== false,
+        });
+        const r = importItems(await keepDeliverable(list.filter((g) => g.email)), contacts);
+        totalAdded += r.added;
+        searched.push(`${zone} (+${r.added})`);
+      } catch (e) {
+        if (/quotidienne|429|RESOURCE_EXHAUSTED/i.test(e.message)) {
+          quotaHit = true;
+          searched.push(`${zone} (limite Google — reprend demain)`);
+          break;
+        }
+        searched.push(`${zone} (erreur)`);
       }
-    } else if (stillNew > 0) {
-      settings.auto.allContactedNotified = false;
+    }
+    settings.auto = settings.auto || {};
+    settings.auto.zoneIndex = zi % zones.length;
+
+    // « Région épuisée » : quand un tour complet de toutes les zones n'ajoute
+    // plus AUCUN nouveau contact, on ÉLARGIT automatiquement le rayon (par
+    // paliers de 8 km, jusqu'à 45 km) pour continuer à trouver des entreprises
+    // dans les régions à faible densité (Québec, Gatineau).
+    settings.auto.cycleAdded = (settings.auto.cycleAdded || 0) + totalAdded;
+    settings.auto.cycleZonesDone = (settings.auto.cycleZonesDone || 0) + perDay;
+    if (settings.auto.cycleZonesDone >= zones.length) {
+      const cycleAdded = settings.auto.cycleAdded;
+      settings.auto.cycleZonesDone = 0;
+      settings.auto.cycleAdded = 0;
+      if (cycleAdded === 0) {
+        const cur = Number(settings.auto.radiusKm) || 12;
+        const MAX_RAYON = 45;
+        if (cur < MAX_RAYON) {
+          settings.auto.radiusKm = Math.min(MAX_RAYON, cur + 8); // on élargit la zone
+          settings.auto.harvestNotified = false;
+          searched.push(`région épuisée → rayon élargi à ${settings.auto.radiusKm} km`);
+        } else if (auto.findOnly && contacts.length >= 25 && !settings.auto.harvestNotified) {
+          // Rayon maximal atteint et toujours rien de neuf → vraiment épuisé.
+          try {
+            await notifyHarvestComplete(settings, contacts);
+          } catch {
+            /* notification échouée, on réessaiera */
+          }
+          settings.auto.harvestNotified = true;
+        }
+      } else {
+        settings.auto.harvestNotified = false;
+      }
     }
 
-    settings.auto.lastRunDate = todayStr();
-    settings.auto.lastResult = {
-      at: new Date().toISOString(),
-      sent: ok + relancesOk,
-      relances: relancesOk,
-      failed: results.length - ok,
-      added: totalAdded,
-      zonesSearched: searched,
-      template: tpl.name,
-      note: [
-        `+${totalAdded} garages ajoutés à la réserve`,
-        relancesOk ? `${relancesOk} relance(s) envoyée(s)` : '',
-        auto.findOnly ? 'mode « trouver seulement » (aucun envoi auto)' : '',
-        !auto.findOnly && noSendToday ? 'week-end : pas d\'envoi' : '',
-        quotaHit ? 'limite Google atteinte (reprend demain)' : '',
-      ]
-        .filter(Boolean)
-        .join(' · '),
-    };
-    await save('sends', sends);
     await save('contacts', contacts);
-    // Sauvegarde SÛRE des réglages : ce passage a pu durer plusieurs minutes.
-    // Pendant ce temps, l'utilisateur a pu changer un réglage (mot de passe,
-    // envoi ON/OFF, zones, adresse…). On RELIT donc la version COURANTE et on
-    // n'écrase QUE les champs que CE passage a réellement modifiés — sinon on
-    // réécrit par-dessus les changements récents avec notre copie périmée, ce
-    // qui « réinitialisait » des campagnes.
+    // Sauvegarde SÛRE : relire la version COURANTE et n'écraser QUE nos champs.
     try {
       const frais = await load('settings');
       frais.auto = frais.auto || {};
-      for (const k of ['lastRunDate', 'lastResult', 'zoneIndex', 'cycleAdded',
-        'cycleZonesDone', 'radiusKm', 'harvestNotified', 'allContactedNotified']) {
+      for (const k of ['zoneIndex', 'cycleAdded', 'cycleZonesDone', 'radiusKm', 'harvestNotified']) {
         frais.auto[k] = settings.auto[k];
       }
+      frais.auto.lastHarvestDate = todayStr();
+      frais.auto.lastResult = {
+        ...(frais.auto.lastResult || {}),
+        added: totalAdded,
+        zonesSearched: searched,
+        note: [
+          `+${totalAdded} garages ajoutés à la réserve`,
+          quotaHit ? 'limite Google atteinte (reprend demain)' : '',
+        ].filter(Boolean).join(' · '),
+      };
       recordDailyCount(frais, contacts.length, totalAdded); // historique sur la version fraîche
       await save('settings', frais);
     } catch {
       recordDailyCount(settings, contacts.length, totalAdded);
       await save('settings', settings);
     }
-    return settings.auto.lastResult;
+    return { added: totalAdded, zonesSearched: searched };
   } catch (e) {
     return { error: e.message };
   } finally {
@@ -2210,8 +2217,10 @@ async function handleApi(req, res, url) {
     return sendJSON(res, 200, { ok: true });
   }
   if (p === '/api/auto/run' && method === 'POST') {
-    const result = await runAutoOnce(true);
-    return sendJSON(res, 200, result);
+    // Lancement manuel : on ENVOIE d'abord (rapide), puis on ratisse (lent).
+    const envoi = await runSendOnce(true);
+    const ratissage = await runHarvestOnce(true);
+    return sendJSON(res, 200, { ...envoi, ...ratissage, envoi, ratissage });
   }
   if (p === '/api/settings/test' && method === 'POST') {
     try {
@@ -2545,16 +2554,29 @@ function forEachCampaign(fn) {
   }
 }
 
-// Automatisation : vérifie au démarrage (après 10 s) puis toutes les 15 minutes,
-// séparément pour chaque campagne. runAutoOnce() ne s'exécute qu'une fois par jour.
-setTimeout(() => {
-  forEachCampaign((id) =>
-    runAutoOnce().then((r) => {
-      if (r && !r.skipped) console.log(`  🤖  [${id}] Automatisation :`, JSON.stringify(r));
-    })
-  );
-}, 10000);
-setInterval(() => forEachCampaign(() => runAutoOnce()), 15 * 60 * 1000);
+// Automatisation : au démarrage (après 10 s) puis toutes les 15 minutes.
+// DEUX passages, dans l'ordre :
+//   1) ENVOI pour les 13 campagnes d'abord (rapide) — aucune ne reste à 0 ;
+//   2) RATISSAGE ensuite (lent) — remplit la réserve sans retarder l'envoi.
+// Chaque phase ne fait son travail qu'une fois par jour (garde interne par date).
+async function autoTick() {
+  // Phase 1 — ENVOI (séquentiel, rapide)
+  for (const camp of CAMPAIGNS) {
+    try {
+      const r = await campaignCtx.run(camp.id, () => runSendOnce());
+      if (r && !r.skipped) console.log(`  📧  [${camp.id}] Envoi :`, JSON.stringify(r));
+    } catch (e) { console.log(`  ⚠️  [${camp.id}] Envoi échoué :`, e.message); }
+  }
+  // Phase 2 — RATISSAGE (séquentiel, lent)
+  for (const camp of CAMPAIGNS) {
+    try {
+      const r = await campaignCtx.run(camp.id, () => runHarvestOnce());
+      if (r && !r.skipped) console.log(`  🔎  [${camp.id}] Ratissage :`, JSON.stringify(r));
+    } catch (e) { console.log(`  ⚠️  [${camp.id}] Ratissage échoué :`, e.message); }
+  }
+}
+setTimeout(autoTick, 10000);
+setInterval(autoTick, 15 * 60 * 1000);
 
 // Vérifie automatiquement les réponses reçues (au démarrage puis toutes les 30 min), par campagne
 setTimeout(() => {
