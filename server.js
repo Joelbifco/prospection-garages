@@ -1368,11 +1368,27 @@ async function runAutoOnce(force = false) {
         .filter(Boolean)
         .join(' · '),
     };
-    // Historique quotidien du nombre de contacts (graphique de croissance)
-    recordDailyCount(settings, contacts.length, totalAdded);
     await save('sends', sends);
     await save('contacts', contacts);
-    await save('settings', settings);
+    // Sauvegarde SÛRE des réglages : ce passage a pu durer plusieurs minutes.
+    // Pendant ce temps, l'utilisateur a pu changer un réglage (mot de passe,
+    // envoi ON/OFF, zones, adresse…). On RELIT donc la version COURANTE et on
+    // n'écrase QUE les champs que CE passage a réellement modifiés — sinon on
+    // réécrit par-dessus les changements récents avec notre copie périmée, ce
+    // qui « réinitialisait » des campagnes.
+    try {
+      const frais = await load('settings');
+      frais.auto = frais.auto || {};
+      for (const k of ['lastRunDate', 'lastResult', 'zoneIndex', 'cycleAdded',
+        'cycleZonesDone', 'radiusKm', 'harvestNotified', 'allContactedNotified']) {
+        frais.auto[k] = settings.auto[k];
+      }
+      recordDailyCount(frais, contacts.length, totalAdded); // historique sur la version fraîche
+      await save('settings', frais);
+    } catch {
+      recordDailyCount(settings, contacts.length, totalAdded);
+      await save('settings', settings);
+    }
     return settings.auto.lastResult;
   } catch (e) {
     return { error: e.message };
