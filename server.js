@@ -6,7 +6,7 @@
 // ============================================================================
 
 import http from 'node:http';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { existsSync, readFileSync, mkdirSync, copyFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -350,17 +350,39 @@ function defaultFor(campaign, key) {
 
 async function load(key) {
   const c = currentCampaign();
-  try {
-    return JSON.parse(await readFile(fileFor(c, key), 'utf8'));
-  } catch {
-    return defaultFor(c, key);
+  const f = fileFor(c, key);
+  // ROBUSTE : on ne retombe sur les défauts QUE si le fichier est absent
+  // (ENOENT). Un JSON invalide (fichier à demi-écrit par une écriture
+  // concurrente) déclenche une PAUSE + nouvel essai, au lieu d'écraser les vrais
+  // réglages avec les défauts — c'est ce qui « réinitialisait » des campagnes.
+  for (let essai = 0; essai < 4; essai++) {
+    let raw;
+    try {
+      raw = await readFile(f, 'utf8');
+    } catch (e) {
+      if (e && e.code === 'ENOENT') return defaultFor(c, key); // fichier absent = normal
+      await new Promise((r) => setTimeout(r, 150));
+      continue;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      await new Promise((r) => setTimeout(r, 150)); // JSON à demi-écrit : on réessaie
+    }
   }
+  return defaultFor(c, key); // dernier recours (après plusieurs essais)
 }
 async function save(key, value) {
   const c = currentCampaign();
   const dir = path.join(DATA_DIR, c);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  await writeFile(fileFor(c, key), JSON.stringify(value, null, 2), 'utf8');
+  const f = fileFor(c, key);
+  // Écriture ATOMIQUE : on écrit dans un fichier temporaire puis on le renomme
+  // (le renommage est instantané). Ainsi un lecteur ne tombe JAMAIS sur un
+  // fichier à demi-écrit — fini les réglages qui se réinitialisent tout seuls.
+  const tmp = f + '.tmp';
+  await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
+  await rename(tmp, f);
 }
 
 // ---------------------------------------------------------------------------
