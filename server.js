@@ -2121,6 +2121,80 @@ async function handleApi(req, res, url) {
     return sendJSON(res, 200, { at: new Date().toISOString(), campagnes: lignes, totaux: tot });
   }
 
+  // --- Performance : comparer les COURRIELS (modèles) et les SECTEURS (niches) ---
+  //  Sur les 13 campagnes : combien de contacts joints, combien ont répondu, et
+  //  le taux de réponse — décliné par modèle de courriel et par secteur.
+  if (p === '/api/performance' && method === 'GET') {
+    const SECTEURS = {
+      garages: '🔧 Garages (national)',
+      auto: '🚗 Auto & garages',
+      construction: '🏗️ Construction & métiers',
+      transport: '🚛 Transport & camionnage',
+      commerce: '🛒 Commerces & restaurants',
+    };
+    const parModele = {};   // nom modèle -> { envois, joints:Set, repondus }
+    const parSecteur = {};  // clé niche  -> { joints, repondus, envois }
+    const parCampagne = [];
+    const rc = (m, k) => (m[k] = m[k] || { envois: 0, joints: 0, repondus: 0 });
+
+    for (const c of CAMPAIGNS) {
+      const secteur = c.niche || 'garages';
+      const stat = await campaignCtx.run(c.id, async () => {
+        const [contacts, sends, templates] = await Promise.all([
+          load('contacts'), load('sends'), load('templates'),
+        ]);
+        const nomTpl = new Map(templates.map((t) => [t.id, t.name || 'Sans nom']));
+        // Modèles reçus (envois OK) par contact + comptage des envois par modèle.
+        const recusPar = new Map(); // contactId -> Set(nom modèle)
+        let envoisCampagne = 0;
+        for (const s of sends) {
+          if (s.status !== 'ok' || !s.contactId) continue;
+          const nom = nomTpl.get(s.templateId) || 'Modèle supprimé';
+          const m = parModele[nom] || (parModele[nom] = { envois: 0, joints: new Set(), repondus: 0 });
+          m.envois++;
+          envoisCampagne++;
+          if (!recusPar.has(s.contactId)) recusPar.set(s.contactId, new Set());
+          recusPar.get(s.contactId).add(nom);
+        }
+        let joints = 0, repondus = 0;
+        for (const contact of contacts) {
+          const modeles = recusPar.get(contact.id);
+          if (!modeles) continue; // jamais joint
+          joints++;
+          const aRepondu = contact.status === 'répondu';
+          if (aRepondu) repondus++;
+          for (const nom of modeles) {
+            const m = parModele[nom];
+            m.joints.add(c.id + ':' + contact.id);
+            if (aRepondu) m.repondus++;
+          }
+        }
+        return { joints, repondus, envois: envoisCampagne };
+      });
+
+      const s = rc(parSecteur, secteur);
+      s.joints += stat.joints; s.repondus += stat.repondus; s.envois += stat.envois;
+      parCampagne.push({
+        id: c.id, nom: c.name, secteur: SECTEURS[secteur] || secteur,
+        joints: stat.joints, repondus: stat.repondus, envois: stat.envois,
+        taux: stat.joints ? +(100 * stat.repondus / stat.joints).toFixed(1) : 0,
+      });
+    }
+
+    const modeles = Object.entries(parModele).map(([nom, m]) => ({
+      nom, envois: m.envois, joints: m.joints.size, repondus: m.repondus,
+      taux: m.joints.size ? +(100 * m.repondus / m.joints.size).toFixed(1) : 0,
+    })).sort((a, b) => b.taux - a.taux || b.repondus - a.repondus);
+
+    const secteurs = Object.entries(parSecteur).map(([cle, s]) => ({
+      cle, nom: SECTEURS[cle] || cle, envois: s.envois, joints: s.joints, repondus: s.repondus,
+      taux: s.joints ? +(100 * s.repondus / s.joints).toFixed(1) : 0,
+    })).sort((a, b) => b.taux - a.taux || b.repondus - a.repondus);
+
+    parCampagne.sort((a, b) => b.taux - a.taux || b.repondus - a.repondus);
+    return sendJSON(res, 200, { at: new Date().toISOString(), modeles, secteurs, campagnes: parCampagne });
+  }
+
   // --- Suivi du coût Google (compteur de recherches, estimation en direct) ---
   if (p === '/api/google-usage' && method === 'GET') {
     const PRIX = 0.032; // $ US par recherche (approx.)
