@@ -2089,6 +2089,38 @@ async function handleApi(req, res, url) {
     return sendJSON(res, 200, { campaigns: CAMPAIGNS, current: currentCampaign() });
   }
 
+  // --- Tableau de bord : récap des 13 campagnes en UN seul appel (pour SIMA) ---
+  if (p === '/api/tableau' && method === 'GET') {
+    const lignes = [];
+    let tot = { total: 0, nouveaux: 0, contactes: 0, repondu: 0, envoyesAuj: 0 };
+    for (const c of CAMPAIGNS) {
+      const l = await campaignCtx.run(c.id, async () => {
+        const [contacts, sends, settings] = await Promise.all([
+          load('contacts'), load('sends'), load('settings'),
+        ]);
+        const avecEmail = contacts.filter((x) => x.email);
+        const nouveaux = avecEmail.filter((x) => x.status === 'nouveau').length;
+        const repondu = avecEmail.filter((x) => x.status === 'répondu').length;
+        const total = avecEmail.length;
+        const contactes = total - nouveaux;
+        const wu = warmupInfo(settings, sends);
+        const cap = Number(wu.cap) || Number(settings.auto?.dailyLimit) || 0;
+        const envoyesAuj = Number(wu.usedToday) || 0;
+        const auto = settings.auto || {};
+        const envoiActif = !!auto.enabled && !auto.findOnly;
+        return {
+          id: c.id, nom: c.name, total, nouveaux, contactes, repondu,
+          envoyesAuj, cap, envoiActif,
+          reserveJours: cap > 0 ? Math.floor(nouveaux / cap) : null,
+        };
+      });
+      lignes.push(l);
+      tot.total += l.total; tot.nouveaux += l.nouveaux; tot.contactes += l.contactes;
+      tot.repondu += l.repondu; tot.envoyesAuj += l.envoyesAuj;
+    }
+    return sendJSON(res, 200, { at: new Date().toISOString(), campagnes: lignes, totaux: tot });
+  }
+
   // --- Suivi du coût Google (compteur de recherches, estimation en direct) ---
   if (p === '/api/google-usage' && method === 'GET') {
     const PRIX = 0.032; // $ US par recherche (approx.)
