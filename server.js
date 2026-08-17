@@ -2181,10 +2181,12 @@ async function handleApi(req, res, url) {
       });
     }
 
-    const modeles = Object.entries(parModele).map(([nom, m]) => ({
-      nom, envois: m.envois, joints: m.joints.size, repondus: m.repondus,
-      taux: m.joints.size ? +(100 * m.repondus / m.joints.size).toFixed(1) : 0,
-    })).sort((a, b) => b.taux - a.taux || b.repondus - a.repondus);
+    const modeles = Object.entries(parModele)
+      .filter(([nom]) => nom !== 'Modèle supprimé') // courriel effacé : pas comparable
+      .map(([nom, m]) => ({
+        nom, envois: m.envois, joints: m.joints.size, repondus: m.repondus,
+        taux: m.joints.size ? +(100 * m.repondus / m.joints.size).toFixed(1) : 0,
+      })).sort((a, b) => b.taux - a.taux || b.repondus - a.repondus);
 
     const secteurs = Object.entries(parSecteur).map(([cle, s]) => ({
       cle, nom: SECTEURS[cle] || cle, envois: s.envois, joints: s.joints, repondus: s.repondus,
