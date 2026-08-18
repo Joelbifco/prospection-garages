@@ -590,8 +590,10 @@ async function loadReplies() {
       <textarea class="rc-reply" rows="4" placeholder="Écris ta réponse à ${esc(r.name) || 'ce garage'}…"></textarea>
       <div class="rc-actions">
         <button class="primary rc-send" data-id="${esc(r.contactId)}">📧 Répondre</button>
+        ${r.contactId ? `<button class="rc-voir" data-id="${esc(r.contactId)}">📄 Voir mon courriel envoyé</button>` : ''}
         <span class="rc-sent" style="color:var(--ok);font-size:13px"></span>
       </div>
+      <div class="rc-sent-email" style="display:none"></div>
     </div>`
     )
     .join('');
@@ -608,6 +610,36 @@ async function loadReplies() {
         card.querySelector('.rc-reply').value = '';
         card.querySelector('.rc-sent').textContent = '✅ Réponse envoyée';
         toast('Réponse envoyée', 'ok');
+      } catch (e) {
+        toast('Erreur : ' + e.message, 'err');
+      } finally {
+        btn.disabled = false;
+      }
+    })
+  );
+
+  // « Voir mon courriel envoyé » : affiche/masque le(s) courriel(s) d'origine.
+  $$('.rc-voir').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      const card = btn.closest('.reply-card');
+      const box = card.querySelector('.rc-sent-email');
+      if (box.style.display !== 'none') { box.style.display = 'none'; btn.textContent = '📄 Voir mon courriel envoyé'; return; }
+      btn.disabled = true;
+      try {
+        const d = await api('/sent?contactId=' + encodeURIComponent(btn.dataset.id));
+        const list = (d && d.courriels) || [];
+        if (!list.length) {
+          box.innerHTML = '<p style="color:var(--muted);margin:8px 0">Aucun courriel envoyé retrouvé pour ce contact.</p>';
+        } else {
+          box.innerHTML = list.map((m) => `
+            <div class="sent-mail">
+              <div class="sent-meta">📤 Envoyé le ${new Date(m.at).toLocaleString('fr-CA', { dateStyle: 'medium', timeStyle: 'short' })} · <em>${esc(m.modele)}</em></div>
+              <div class="sent-subject">${esc(m.subject) || '(sans sujet)'}</div>
+              <div class="sent-body">${esc(m.body)}</div>
+            </div>`).join('');
+        }
+        box.style.display = 'block';
+        btn.textContent = '📄 Masquer mon courriel envoyé';
       } catch (e) {
         toast('Erreur : ' + e.message, 'err');
       } finally {
