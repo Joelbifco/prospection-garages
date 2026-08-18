@@ -243,3 +243,12 @@ hr { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
 .sent-meta { font-size: 12px; color: var(--muted, #8b9bb0); margin-bottom: 4px; }
 .sent-subject { font-weight: 600; margin-bottom: 6px; }
 .sent-body { white-space: pre-wrap; font-size: 13.5px; line-height: 1.5; }
+
+/* Fil de conversation : distinguer envoyés / reçus */
+.sent-mail.envoye { border-left-color: var(--accent, #35d6c4); }
+.sent-mail.recu {
+  border-left-color: #f0a020;
+  background: rgba(240,160,32,.10);
+  margin-left: 18px;
+}
+.sent-mail.recu .sent-meta { color: #f0a020; }

@@ -2568,42 +2568,46 @@ async function handleApi(req, res, url) {
     const sorted = replies.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
     return sendJSON(res, 200, sorted);
   }
-  // Courriel(s) ENVOYÉ(S) à un contact — pour « voir mon courriel envoyé » sous
-  // une réponse. Le sujet est stocké tel quel ; le corps est reconstitué à partir
-  // du modèle utilisé (best-effort si le modèle a changé depuis).
+  // Fil de conversation complet avec un contact — pour le bouton « voir le
+  // courriel envoyé / la chaîne ». Fusionne les courriels ENVOYÉS (sujet stocké,
+  // corps reconstitué depuis le modèle) et les réponses REÇUES, en ordre
+  // chronologique. Chaque entrée porte `sens` : « envoye » ou « recu ».
   if (p === '/api/sent' && method === 'GET') {
     const contactId = url.searchParams.get('contactId');
     if (!contactId) return sendJSON(res, 400, { error: 'contactId requis' });
-    const [sends, contacts, templates, settings] = await Promise.all([
-      load('sends'), load('contacts'), load('templates'), load('settings'),
+    const [sends, contacts, templates, settings, replies] = await Promise.all([
+      load('sends'), load('contacts'), load('templates'), load('settings'), load('replies'),
     ]);
     const contact = contacts.find((c) => c.id === contactId);
-    const mine = sends
+    const envoyes = sends
       .filter((s) => s.contactId === contactId && s.status === 'ok')
-      .sort((a, b) => new Date(a.at) - new Date(b.at));
-    const courriels = mine.map((s) => {
-      const tpl = templates.find((t) => t.id === s.templateId);
-      let subject = s.subject || '';
-      let body = '';
-      if (s.isReply) {
-        body = '(Ta réponse envoyée depuis l\'app — le texte n\'est pas conservé.)';
-      } else if (tpl && contact) {
-        subject = subject || renderTemplate(tpl.subject, contact);
-        body = buildEmailBody(renderTemplate(tpl.body, contact), settings);
-      } else {
-        body = '(Le modèle de ce courriel a été supprimé — le texte exact ne peut pas être reconstitué.)';
-      }
-      return {
-        at: s.at,
-        subject,
-        body,
-        modele: s.isReply ? 'Ta réponse' : (tpl ? tpl.name : 'Modèle supprimé'),
-        isReply: !!s.isReply,
-      };
-    });
+      .map((s) => {
+        const tpl = templates.find((t) => t.id === s.templateId);
+        let subject = s.subject || '';
+        let corps = '';
+        if (s.isReply) {
+          corps = '(Ta réponse envoyée depuis l\'app — le texte n\'est pas conservé.)';
+        } else if (tpl && contact) {
+          subject = subject || renderTemplate(tpl.subject, contact);
+          corps = buildEmailBody(renderTemplate(tpl.body, contact), settings);
+        } else {
+          corps = '(Le modèle de ce courriel a été supprimé — le texte exact ne peut pas être reconstitué.)';
+        }
+        return {
+          at: s.at, sens: 'envoye', subject, corps,
+          modele: s.isReply ? 'Ta réponse' : (tpl ? tpl.name : 'Modèle supprimé'),
+        };
+      });
+    const recus = replies
+      .filter((r) => r.contactId === contactId)
+      .map((r) => ({
+        at: r.date, sens: 'recu', subject: r.subject || '', corps: r.text || '',
+        modele: r.from ? `De ${r.from}` : 'Réponse reçue',
+      }));
+    const fil = [...envoyes, ...recus].sort((a, b) => new Date(a.at) - new Date(b.at));
     return sendJSON(res, 200, {
       contact: contact ? { name: contact.name, email: contact.email } : null,
-      courriels,
+      fil,
     });
   }
   if (p === '/api/reply/send' && method === 'POST') {
