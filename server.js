@@ -1465,8 +1465,10 @@ async function checkReplies() {
   const settings = await load('settings');
   const user = settings.smtp?.user;
   const pass = settings.smtp?.pass;
-  if (!user || !pass) throw new Error('Compte Gmail non configuré (voir Réglages)');
-  const host = settings.imap?.host || 'imap.gmail.com';
+  if (!user || !pass) throw new Error('Compte courriel non configuré (voir Réglages)');
+  // Défaut Hostinger : les boîtes de Bifco sont chez Hostinger (relayées par le
+  // tunnel SIMA, cf. /etc/hosts qui mappe imap.hostinger.com -> 127.0.0.1).
+  const host = settings.imap?.host || 'imap.hostinger.com';
   const port = Number(settings.imap?.port) || 993;
 
   const client = new ImapFlow({ host, port, secure: true, auth: { user, pass }, logger: false });
