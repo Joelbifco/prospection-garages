@@ -252,3 +252,19 @@ hr { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
   margin-left: 18px;
 }
 .sent-mail.recu .sent-meta { color: #f0a020; }
+
+/* Réponses : voir si tu as déjà répondu */
+.reply-card { border-left: 4px solid transparent; }
+.reply-card.rc-attente { border-left-color: #f0a020; }
+.reply-card.rc-repondu { border-left-color: var(--ok, #4ade80); }
+.rc-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+.rc-attente .rc-badge { background: rgba(240,160,32,.18); color: #f0a020; }
+.rc-repondu .rc-badge { background: rgba(74,222,128,.15); color: var(--ok, #4ade80); }

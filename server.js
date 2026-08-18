@@ -2564,8 +2564,19 @@ async function handleApi(req, res, url) {
     }
   }
   if (p === '/api/replies' && method === 'GET') {
-    const replies = await load('replies');
-    const sorted = replies.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+    const [replies, sends] = await Promise.all([load('replies'), load('sends')]);
+    // Réponses que TU as envoyées depuis l'app (bouton « Répondre »).
+    const mesReponses = sends.filter((s) => s.isReply && s.status === 'ok' && s.contactId);
+    const sorted = replies
+      .slice()
+      .map((r) => {
+        // « Répondu par moi » : une réponse envoyée à ce contact APRÈS la sienne.
+        const repondu = mesReponses.some(
+          (s) => s.contactId === r.contactId && new Date(s.at) >= new Date(r.date)
+        );
+        return { ...r, repondu };
+      })
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
     return sendJSON(res, 200, sorted);
   }
   // Fil de conversation complet avec un contact — pour le bouton « voir le

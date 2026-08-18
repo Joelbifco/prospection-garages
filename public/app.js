@@ -580,9 +580,12 @@ async function loadReplies() {
   box.innerHTML = replies
     .map(
       (r) => `
-    <div class="reply-card" data-id="${esc(r.contactId)}">
+    <div class="reply-card ${r.repondu ? 'rc-repondu' : 'rc-attente'}" data-id="${esc(r.contactId)}">
       <div class="rc-head">
-        <div><span class="rc-name">${esc(r.name) || esc(r.from)}</span> <span class="rc-from">&lt;${esc(r.from)}&gt;</span></div>
+        <div>
+          <span class="rc-badge">${r.repondu ? '✅ Répondu' : '✉️ À répondre'}</span>
+          <span class="rc-name">${esc(r.name) || esc(r.from)}</span> <span class="rc-from">&lt;${esc(r.from)}&gt;</span>
+        </div>
         <span class="rc-date">${new Date(r.date).toLocaleString('fr-CA', { dateStyle: 'medium', timeStyle: 'short' })}</span>
       </div>
       ${r.subject ? `<div class="rc-subject">${esc(r.subject)}</div>` : ''}
@@ -609,6 +612,11 @@ async function loadReplies() {
         if (r.error) throw new Error(r.error);
         card.querySelector('.rc-reply').value = '';
         card.querySelector('.rc-sent').textContent = '✅ Réponse envoyée';
+        // La carte passe en « Répondu » tout de suite (couleur + badge).
+        card.classList.remove('rc-attente');
+        card.classList.add('rc-repondu');
+        const badge = card.querySelector('.rc-badge');
+        if (badge) badge.textContent = '✅ Répondu';
         toast('Réponse envoyée', 'ok');
       } catch (e) {
         toast('Erreur : ' + e.message, 'err');
