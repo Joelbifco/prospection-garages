@@ -1228,7 +1228,7 @@ async function runSendOnce(force = false) {
   // RELANCES aux contacts déjà joints qui n'ont pas répondu (modèle « Relance »
   // différent, une seule fois chacun, avec un délai entre chaque). Ça garde
   // l'envoi productif quand une campagne n'a plus de nouveaux contacts.
-  let relancesOk = 0;
+  let relancesOk = 0, relancesTentes = 0;
   const resteQuota = Math.max(0, remaining - ok); // quota restant (envois réussis)
   if (resteQuota > 0) {
     const relTpls = templates.filter((t) => /relance/i.test(t.name || ''));
@@ -1255,6 +1255,7 @@ async function runSendOnce(force = false) {
         parTpl.get(x.relTpl.id).cs.push(x.c);
       }
       for (const grp of parTpl.values()) {
+        relancesTentes += grp.cs.length;
         const out = await deliverToContacts(settings, grp.tpl, grp.cs, sends, contacts);
         relancesOk += out.results.filter((r) => r.status === 'ok').length;
       }
@@ -1273,12 +1274,21 @@ async function runSendOnce(force = false) {
     allContactedNotified = false;
   }
 
+  // ÉCHEC TOTAL : on a TENTÉ des envois mais AUCUN n'a réussi (typiquement le
+  // tunnel SMTP tombé). Dans ce cas on ne marque PAS l'envoi comme « fait
+  // aujourd'hui » → le prochain passage RÉESSAIE tout seul dès que le tunnel
+  // revient. Auto-réparation.
+  const tentes = results.length + relancesTentes;
+  const reussis = ok + relancesOk;
+  const echecComplet = tentes > 0 && reussis === 0;
+
   const envoiResult = {
     at: new Date().toISOString(),
-    sent: ok + relancesOk,
+    sent: reussis,
     relances: relancesOk,
     failed: results.length - ok,
     template: tpl.name,
+    echecComplet,
   };
   await save('sends', sends);
   await save('contacts', contacts);
@@ -1287,8 +1297,8 @@ async function runSendOnce(force = false) {
   try {
     const frais = await load('settings');
     frais.auto = frais.auto || {};
-    frais.auto.lastSendDate = todayStr();
-    frais.auto.lastRunDate = todayStr(); // compat : surveillance + UI existantes
+    frais.auto.lastRunDate = todayStr(); // il a bien TENTÉ aujourd'hui (surveillance)
+    if (!echecComplet) frais.auto.lastSendDate = todayStr(); // « fait » seulement si ≥1 réussi
     frais.auto.allContactedNotified = allContactedNotified;
     frais.auto.lastResult = { ...(frais.auto.lastResult || {}), ...envoiResult };
     await save('settings', frais);
