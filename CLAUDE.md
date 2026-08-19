@@ -33,10 +33,6 @@ Les boîtes de Bifco sont chez **Hostinger** — `smtp.hostinger.com:465` (SSL) 
 `imap.hostinger.com:993`, relayées par le **tunnel SIMA** (`/etc/hosts` mappe
 `imap.hostinger.com` → `127.0.0.1`). C'est le défaut du code.
 
-> ⚠️ `GUIDE.md` décrit encore une configuration **Google Workspace / mot de passe
-> d'application Gmail**. C'est l'ancienne configuration : le code a migré vers
-> Hostinger. À corriger dans le guide quand l'occasion se présente.
-
 ## Structure
 | Fichier | Rôle |
 |---|---|
@@ -45,7 +41,7 @@ Les boîtes de Bifco sont chez **Hostinger** — `smtp.hostinger.com:465` (SSL) 
 | `outils/demarrer-moteurs.js` | Prépare la campagne « Entreprises » en mode *trouver seulement* (`findOnly`) : aucun envoi tant que l'adresse neuve n'est pas réchauffée. Relançable sans danger. |
 | `outils/propager-cle-google.js` | Copie la clé Google Places d'une campagne vers les 12 autres, sans jamais l'afficher. |
 | `outils/verifier-envois.mjs` | Tourne **sur SIMA**, pas sur le cloud : vérifie chaque jour ouvrable que les courriels sont partis, alerte sur 3 canaux sinon. Si le cloud est en panne, il ne peut pas signaler sa propre panne. |
-| `GUIDE.md` | Guide utilisateur (voir la réserve sur Hostinger ci-dessus) |
+| `GUIDE.md` | Guide utilisateur — configuration SMTP/IMAP, usage quotidien |
 | `DEMARRER-NOUVEL-ORDI.md` | Réinstallation sur une autre machine |
 
 ## Endpoints utiles

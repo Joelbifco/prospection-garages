@@ -20,19 +20,22 @@ Une fenêtre noire s'ouvre (laisse-la ouverte), puis ton navigateur ouvre l'app 
 ## 📝 Première configuration (à faire une seule fois)
 
 1. Onglet **⚙️ Réglages**
-2. Ton courriel `bifcoshop.com` est sur **Google Workspace (Gmail)**. Paramètres SMTP :
-   - **Serveur SMTP** : `smtp.gmail.com`
+2. Ton courriel `bifcoshop.com` est chez **Hostinger**. Paramètres :
+   - **Serveur SMTP** (envoi) : `smtp.hostinger.com`
    - **Port** : `465`, coche **« SSL »**
-   - **Identifiant** : `partenaires@bifcoshop.com`
-   - **Mot de passe** : un **mot de passe d'application** Google (voir ci-dessous), pas ton mot de passe habituel
+   - **Serveur IMAP** (lecture des réponses) : `imap.hostinger.com`, port `993`
+   - **Identifiant** : l'**adresse complète** de la campagne (ex. `partenaires@bifcoshop.com`),
+     jamais seulement la partie avant le `@`
+   - **Mot de passe** : celui de la boîte courriel, créé dans le panneau Hostinger
 
-   **Créer le mot de passe d'application** (une seule fois) :
-   - Connecte-toi à `partenaires@bifcoshop.com`, puis va sur **myaccount.google.com/apppasswords**
-   - (La vérification en 2 étapes doit être activée sur le compte — sinon active-la d'abord dans Sécurité.)
-   - Donne un nom (ex. « App courriels ») → Google te donne un code de **16 caractères**
-   - Copie ce code dans le champ **Mot de passe** de l'app.
+   > ℹ️ Chaque campagne a sa propre adresse d'envoi : l'identifiant SMTP change
+   > d'une campagne à l'autre.
 
-   > ✅ SPF, DKIM et DMARC sont déjà configurés par Google sur ton domaine — rien à faire côté DNS.
+   > ⚠️ Si tu vois encore `smtp.gmail.com` et un mot de passe d'application Google
+   > dans de vieux réglages, c'est l'ancienne configuration : le domaine est passé
+   > de Google Workspace à Hostinger. Remplace-les par les valeurs ci-dessus.
+
+   > ✅ SPF, DKIM et DMARC sont déjà configurés sur le domaine — rien à faire côté DNS.
 3. Remplis ta **signature** et l'**adresse postale** de l'entreprise.
 4. Clique **Tester la connexion**. Tu dois voir « Connexion SMTP réussie ✓ ».
 5. Clique **Enregistrer**.
