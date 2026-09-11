@@ -818,6 +818,11 @@ async function loadSettings() {
   $('#smtp-secure').checked = !!s.smtp.secure;
   $('#smtp-user').value = s.smtp.user || '';
   $('#smtp-pass').value = s.smtp.pass || '';
+  const im = s.imap || {};
+  $('#imap-host').value = im.host || '';
+  $('#imap-port').value = im.port || 993;
+  $('#imap-user').value = im.user || '';
+  $('#imap-pass').value = im.pass || '';
   $('#from-name').value = s.from.name || '';
   $('#from-email').value = s.from.email || '';
   $('#signature').value = s.signature || '';
@@ -864,6 +869,12 @@ async function saveSettings() {
       secure: $('#smtp-secure').checked,
       user: $('#smtp-user').value.trim(),
       pass: $('#smtp-pass').value,
+    },
+    imap: {
+      host: $('#imap-host').value.trim(),
+      port: Number($('#imap-port').value) || 993,
+      user: $('#imap-user').value.trim(),
+      pass: $('#imap-pass').value,
     },
     from: { name: $('#from-name').value.trim(), email: $('#from-email').value.trim() },
     signature: $('#signature').value,

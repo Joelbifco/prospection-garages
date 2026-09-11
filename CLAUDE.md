@@ -27,6 +27,19 @@ phases, pour qu'aucune campagne ne se retrouve à 0 contact le matin.
   `connect ENETUNREACH …:465`.
 - **Écriture atomique des réglages.** Sans elle, des campagnes se réinitialisaient
   toutes seules. Le ratissage ne doit réécrire **que ses propres champs de suivi**.
+- **Un seul lot d'envoi par jour, réussi ou non** (`runSendOnce`). L'ancienne
+  « auto-réparation » relançait 50 courriels tous les 15 min sur échec total : le
+  11 sept. 2026 ça a fait bloquer **tout le compte Hostinger** (`554 Outbound sending
+  is disabled`). Après 2 échecs totaux consécutifs, la campagne passe seule en
+  `findOnly` (`auto.pauseAuto`) et alerte.
+- **Verrou `tickBusy` dans `autoTick`** : un passage de 15 min peut durer plus longtemps,
+  sans verrou les lots s'empilaient. Ne pas retirer.
+- **Erreur SMTP fatale = arrêt du lot** (`isFatalSmtpError`, `deliverToContacts`) :
+  compte désactivé, identifiants refusés, `too many AUTH`… on n'insiste pas sur les
+  contacts suivants, ils restent `nouveau`.
+- **Identifiants IMAP distincts** (`settings.imap.user/pass`, repli sur le SMTP si vides).
+  Indispensable dès que l'envoi passe par un relais (Brevo, boîtes dédiées) : sinon la
+  lecture des réponses tente de se connecter à Hostinger avec l'identifiant du relais.
 
 ## Courriel : Hostinger, pas Gmail
 Les boîtes de Bifco sont chez **Hostinger** — `smtp.hostinger.com:465` (SSL) et

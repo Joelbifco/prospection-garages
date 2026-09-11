@@ -305,6 +305,23 @@
           <input id="smtp-pass" type="password" placeholder="mot de passe d'application Google" />
         </label>
         <hr />
+        <h3>Lecture des réponses (IMAP)</h3>
+        <p class="hint">Boîte où <b>arrivent les réponses</b>. Laisse l'identifiant vide si c'est la même boîte que l'envoi (mêmes identifiants que le SMTP). À remplir seulement si l'envoi passe par un relais (Brevo, boîtes dédiées…).</p>
+        <div class="two">
+          <label>Serveur IMAP
+            <input id="imap-host" placeholder="imap.hostinger.com" />
+          </label>
+          <label>Port
+            <input id="imap-port" type="number" placeholder="993" />
+          </label>
+        </div>
+        <label>Identifiant IMAP (adresse complète, vide = celui du SMTP)
+          <input id="imap-user" placeholder="moteurs@bifcomoteurs.com" />
+        </label>
+        <label>Mot de passe IMAP
+          <input id="imap-pass" type="password" placeholder="mot de passe de la boîte" />
+        </label>
+        <hr />
         <label>Nom d'expéditeur affiché
           <input id="from-name" placeholder="Bifco — Partenariats" />
         </label>

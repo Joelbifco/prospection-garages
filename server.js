@@ -172,7 +172,7 @@ function fileFor(campaign, key) {
 const DEFAULTS = {
   settings: {
     smtp: { host: 'smtp.gmail.com', port: 465, secure: true, user: 'partenaires@bifcoshop.com', pass: '' },
-    imap: { host: 'imap.gmail.com', port: 993 },
+    imap: { host: 'imap.hostinger.com', port: 993, user: '', pass: '' }, // user vide = identifiants SMTP
     from: { name: 'Bifco — Partenariats', email: 'partenaires@bifcoshop.com' },
     sendDelayMs: 4000,
     signature: '',
@@ -1112,6 +1112,15 @@ function importItems(items, contacts) {
 }
 
 // Envoie le courriel à une liste de contacts déjà plafonnée. Mute `sends` et `contacts`.
+// Erreur SMTP « fatale » : inutile d'insister sur les 49 contacts suivants, le
+// compte est bloqué / les identifiants sont refusés / le serveur est injoignable.
+// Insister ne fait qu'aggraver le blocage (ex. « too many AUTH commands »).
+const FATAL_SMTP_RE =
+  /outbound sending is disabled|sending is disabled|too many auth|invalid login|authentication failed|missing credentials|\b535\b|\b554 5\.7\.1\b|EAUTH|ECONNREFUSED|ENOTFOUND|ENETUNREACH|ETIMEDOUT|ECONNRESET/i;
+function isFatalSmtpError(e) {
+  return FATAL_SMTP_RE.test(String((e && e.message) || e || ''));
+}
+
 async function deliverToContacts(settings, tpl, targets, sends, contacts) {
   const transport = makeTransport(settings);
   const fromLine = settings.from.name
@@ -1129,6 +1138,7 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
   const results = [];
   let skippedDuplicate = 0;
   let skippedInvalid = 0;
+  let fatal = ''; // message de l'erreur fatale qui a interrompu le lot (vide = aucun)
   for (let i = 0; i < targets.length; i++) {
     const c = targets[i];
     if (c.status === 'invalide') {
@@ -1168,17 +1178,27 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
       } catch (e) {
         rec.status = 'erreur';
         rec.error = e.message;
+        if (isFatalSmtpError(e)) {
+          fatal = e.message;
+          break; // pas de 2e ni 3e essai : le compte est bloqué ou refusé
+        }
         if (essai < 3) await sleep(2500); // pause avant de réessayer
       }
     }
     if (rec.status === 'ok') alreadySent.add(c.id); // évite un doublon dans le même lot
     results.push(rec);
     sends.push(rec);
+    if (fatal) {
+      // ARRÊT DU LOT : on n'essaie pas les contacts suivants, ils restent
+      // « nouveau » et partiront quand le compte sera rétabli.
+      console.log(`  ⛔  Lot interrompu après ${results.length} tentative(s) — erreur fatale SMTP : ${fatal}`);
+      break;
+    }
     if (i < targets.length - 1 && settings.sendDelayMs > 0) {
       await sleep(Number(settings.sendDelayMs) || 0);
     }
   }
-  return { results, skippedDuplicate, skippedInvalid };
+  return { results, skippedDuplicate, skippedInvalid, fatal };
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,9 +1237,11 @@ async function runSendOnce(force = false) {
   const isNew = (c) => c.email && c.status === 'nouveau';
   const targets = contacts.filter(isNew).slice(0, Math.max(0, remaining));
   let results = [];
+  let fatal = '';
   if (targets.length) {
     const out = await deliverToContacts(settings, tpl, targets, sends, contacts);
     results = out.results;
+    fatal = out.fatal || '';
   }
   const ok = results.filter((r) => r.status === 'ok').length;
 
@@ -1230,7 +1252,7 @@ async function runSendOnce(force = false) {
   // l'envoi productif quand une campagne n'a plus de nouveaux contacts.
   let relancesOk = 0, relancesTentes = 0;
   const resteQuota = Math.max(0, remaining - ok); // quota restant (envois réussis)
-  if (resteQuota > 0) {
+  if (resteQuota > 0 && !fatal) { // compte bloqué → pas de relances non plus
     const relTpls = templates.filter((t) => /relance/i.test(t.name || ''));
     if (relTpls.length) {
       const delaiMs = Math.max(0, Number(auto.relanceDelaiJours ?? 3)) * 86400000;
@@ -1258,6 +1280,7 @@ async function runSendOnce(force = false) {
         relancesTentes += grp.cs.length;
         const out = await deliverToContacts(settings, grp.tpl, grp.cs, sends, contacts);
         relancesOk += out.results.filter((r) => r.status === 'ok').length;
+        if (out.fatal) { fatal = out.fatal; break; }
       }
     }
   }
@@ -1274,10 +1297,13 @@ async function runSendOnce(force = false) {
     allContactedNotified = false;
   }
 
-  // ÉCHEC TOTAL : on a TENTÉ des envois mais AUCUN n'a réussi (typiquement le
-  // tunnel SMTP tombé). Dans ce cas on ne marque PAS l'envoi comme « fait
-  // aujourd'hui » → le prochain passage RÉESSAIE tout seul dès que le tunnel
-  // revient. Auto-réparation.
+  // ÉCHEC TOTAL : on a TENTÉ des envois mais AUCUN n'a réussi (compte bloqué,
+  // identifiants refusés, tunnel tombé…).
+  // RÈGLE (depuis le 11 sept. 2026) : UN SEUL lot par jour, réussi ou non.
+  // L'ancienne « auto-réparation » relançait un nouveau lot de 50 à chaque
+  // passage de 15 min : des centaines de connexions refusées par heure, ce qui
+  // a fait bloquer TOUT le compte Hostinger. Après 2 jours d'échec total
+  // consécutifs, la campagne se met d'elle-même en pause (findOnly) et alerte.
   const tentes = results.length + relancesTentes;
   const reussis = ok + relancesOk;
   const echecComplet = tentes > 0 && reussis === 0;
@@ -1289,20 +1315,47 @@ async function runSendOnce(force = false) {
     failed: results.length - ok,
     template: tpl.name,
     echecComplet,
+    fatal: fatal || undefined,
   };
   await save('sends', sends);
   await save('contacts', contacts);
   // Sauvegarde SÛRE : relire la version COURANTE et n'écraser QUE nos champs
   // (l'utilisateur a pu changer un réglage pendant l'envoi).
+  let pauseAuto = null;
   try {
     const frais = await load('settings');
     frais.auto = frais.auto || {};
     frais.auto.lastRunDate = todayStr(); // il a bien TENTÉ aujourd'hui (surveillance)
-    if (!echecComplet) frais.auto.lastSendDate = todayStr(); // « fait » seulement si ≥1 réussi
+    frais.auto.lastSendDate = todayStr(); // un seul lot par jour, même en cas d'échec
     frais.auto.allContactedNotified = allContactedNotified;
     frais.auto.lastResult = { ...(frais.auto.lastResult || {}), ...envoiResult };
+    if (echecComplet) {
+      frais.auto.echecsTotauxConsecutifs = (Number(frais.auto.echecsTotauxConsecutifs) || 0) + 1;
+      if (frais.auto.echecsTotauxConsecutifs >= 2) {
+        frais.auto.findOnly = true; // PAUSE automatique de l'envoi (le ratissage continue)
+        pauseAuto = {
+          at: envoiResult.at,
+          raison: `${frais.auto.echecsTotauxConsecutifs} échecs totaux consécutifs — ${fatal || 'aucun envoi réussi'}`,
+        };
+        frais.auto.pauseAuto = pauseAuto;
+      }
+    } else if (tentes > 0) {
+      frais.auto.echecsTotauxConsecutifs = 0;
+    }
     await save('settings', frais);
   } catch { /* on réessaiera au prochain passage */ }
+  if (pauseAuto) {
+    envoiResult.pauseAuto = pauseAuto;
+    console.log(`  ⏸️  [${currentCampaign()}] Envoi mis en PAUSE automatiquement : ${pauseAuto.raison}`);
+    try {
+      const camp = CAMPAIGNS.find((x) => x.id === currentCampaign()) || { name: currentCampaign() };
+      await notifyCampaignProblem(
+        camp,
+        `Envoi mis en PAUSE automatiquement (${pauseAuto.raison}). ` +
+          'Corrige le compte courriel puis décoche « trouver seulement » dans Auto pour reprendre.'
+      );
+    } catch { /* alerte impossible (tout est bloqué) : le gardien SIMA prendra le relais */ }
+  }
   return envoiResult;
 }
 
@@ -1473,8 +1526,11 @@ function buildFunnel(contacts, sends) {
 // ---------------------------------------------------------------------------
 async function checkReplies() {
   const settings = await load('settings');
-  const user = settings.smtp?.user;
-  const pass = settings.smtp?.pass;
+  // Identifiants IMAP DISTINCTS du SMTP : quand l'envoi passe par un relais
+  // (Brevo, boîtes dédiées…), l'identifiant SMTP n'est pas celui de la boîte où
+  // arrivent les réponses. Repli sur le SMTP si le bloc IMAP est vide.
+  const user = (settings.imap?.user || '').trim() || settings.smtp?.user;
+  const pass = (settings.imap?.user || '').trim() ? settings.imap?.pass : settings.smtp?.pass;
   if (!user || !pass) throw new Error('Compte courriel non configuré (voir Réglages)');
   // Défaut Hostinger : les boîtes de Bifco sont chez Hostinger (relayées par le
   // tunnel SIMA, cf. /etc/hosts qui mappe imap.hostinger.com -> 127.0.0.1).
@@ -2253,6 +2309,8 @@ async function handleApi(req, res, url) {
     const s = await load('settings');
     const masked = structuredClone(s);
     masked.smtp.pass = s.smtp.pass ? '********' : '';
+    masked.imap = { ...(s.imap || {}) };
+    masked.imap.pass = s.imap?.pass ? '********' : '';
     masked.googleApiKey = s.googleApiKey ? '********' : '';
     return sendJSON(res, 200, masked);
   }
@@ -2263,6 +2321,7 @@ async function handleApi(req, res, url) {
       ...cur,
       ...body,
       smtp: { ...cur.smtp, ...(body.smtp || {}) },
+      imap: { ...(cur.imap || {}), ...(body.imap || {}) },
       from: { ...cur.from, ...(body.from || {}) },
       warmup: { ...(cur.warmup || {}), ...(body.warmup || {}) },
       auto: { ...(cur.auto || {}), ...(body.auto || {}) },
@@ -2270,6 +2329,9 @@ async function handleApi(req, res, url) {
     // Ne pas écraser le mot de passe si l'utilisateur laisse le masque
     if (body.smtp && (body.smtp.pass === '********' || body.smtp.pass === undefined)) {
       next.smtp.pass = cur.smtp.pass;
+    }
+    if (body.imap && (body.imap.pass === '********' || body.imap.pass === undefined)) {
+      next.imap.pass = cur.imap?.pass || '';
     }
     // Ne jamais effacer l'adresse d'envoi (smtp.user / from.email) par du vide
     // quand une adresse existe déjà : le formulaire Réglages n'est rempli qu'au
@@ -2544,12 +2606,13 @@ async function handleApi(req, res, url) {
       }
     }
 
-    const { results, skippedDuplicate } = await deliverToContacts(settings, tpl, targets, sends, contacts);
+    const { results, skippedDuplicate, fatal } = await deliverToContacts(settings, tpl, targets, sends, contacts);
     await Promise.all([save('sends', sends), save('contacts', contacts)]);
     const ok = results.filter((r) => r.status === 'ok').length;
     return sendJSON(res, 200, {
       sent: ok,
       failed: results.length - ok,
+      fatal: fatal || undefined, // lot interrompu : compte bloqué / identifiants refusés
       held,
       duplicatesSkipped: skippedDuplicate,
       cap: wu.enabled ? wu.cap : null,
@@ -2732,20 +2795,36 @@ function forEachCampaign(fn) {
 //   1) ENVOI pour les 13 campagnes d'abord (rapide) — aucune ne reste à 0 ;
 //   2) RATISSAGE ensuite (lent) — remplit la réserve sans retarder l'envoi.
 // Chaque phase ne fait son travail qu'une fois par jour (garde interne par date).
+// VERROU anti-chevauchement : un passage complet (13 envois + 13 ratissages)
+// peut durer plus de 15 min. Sans verrou, setInterval empilait les passages
+// (jusqu'à 5 lots en parallèle le 11 sept. 2026). Si un passage tourne encore,
+// le suivant est simplement sauté ; on ne perd rien (garde interne par date).
+let tickBusy = false;
+let tickSince = 0;
 async function autoTick() {
-  // Phase 1 — ENVOI (séquentiel, rapide)
-  for (const camp of CAMPAIGNS) {
-    try {
-      const r = await campaignCtx.run(camp.id, () => runSendOnce());
-      if (r && !r.skipped) console.log(`  📧  [${camp.id}] Envoi :`, JSON.stringify(r));
-    } catch (e) { console.log(`  ⚠️  [${camp.id}] Envoi échoué :`, e.message); }
+  if (tickBusy) {
+    console.log(`  ⏭️  Passage automatique sauté : le précédent tourne encore depuis ${Math.round((Date.now() - tickSince) / 60000)} min`);
+    return;
   }
-  // Phase 2 — RATISSAGE (séquentiel, lent)
-  for (const camp of CAMPAIGNS) {
-    try {
-      const r = await campaignCtx.run(camp.id, () => runHarvestOnce());
-      if (r && !r.skipped) console.log(`  🔎  [${camp.id}] Ratissage :`, JSON.stringify(r));
-    } catch (e) { console.log(`  ⚠️  [${camp.id}] Ratissage échoué :`, e.message); }
+  tickBusy = true;
+  tickSince = Date.now();
+  try {
+    // Phase 1 — ENVOI (séquentiel, rapide)
+    for (const camp of CAMPAIGNS) {
+      try {
+        const r = await campaignCtx.run(camp.id, () => runSendOnce());
+        if (r && !r.skipped) console.log(`  📧  [${camp.id}] Envoi :`, JSON.stringify(r));
+      } catch (e) { console.log(`  ⚠️  [${camp.id}] Envoi échoué :`, e.message); }
+    }
+    // Phase 2 — RATISSAGE (séquentiel, lent)
+    for (const camp of CAMPAIGNS) {
+      try {
+        const r = await campaignCtx.run(camp.id, () => runHarvestOnce());
+        if (r && !r.skipped) console.log(`  🔎  [${camp.id}] Ratissage :`, JSON.stringify(r));
+      } catch (e) { console.log(`  ⚠️  [${camp.id}] Ratissage échoué :`, e.message); }
+    }
+  } finally {
+    tickBusy = false;
   }
 }
 setTimeout(autoTick, 10000);
