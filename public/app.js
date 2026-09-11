@@ -891,8 +891,13 @@ $('#btn-test-smtp').addEventListener('click', async () => {
 
 $('#btn-test-mail').addEventListener('click', async () => {
   await saveSettings();
+  // On peut préciser une adresse (ex. son Gmail perso pour vérifier la
+  // délivrabilité vers une VRAIE boîte externe). Vide = adresse d'envoi.
+  const to = prompt("Adresse pour le test (laisse vide = ton adresse d'envoi) :", '');
+  if (to === null) return; // annulé
+  const body = to.trim() ? { to: to.trim() } : {};
   setStatus('#settings-status', '<span class="spinner"></span>Envoi du courriel de test…', 'working');
-  const r = await api('/settings/testmail', 'POST', {});
+  const r = await api('/settings/testmail', 'POST', body);
   setStatus('#settings-status', (r.ok ? '✅ ' : '⚠️ ') + r.message, r.ok ? 'done' : 'error');
   if (r.ok) toast('Courriel de test envoyé', 'ok');
 });
