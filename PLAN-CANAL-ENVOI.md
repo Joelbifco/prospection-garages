@@ -46,7 +46,16 @@ Dimensionnement de départ : 2 boîtes par domaine sur les 12 domaines, soit 24 
 
 Dans l'ordre, les quatre premières **avant toute réactivation**, quel que soit le fournisseur.
 
-> **État au 11 septembre 2026 (soir)** : modifications 1 à 4 faites et testées en local, pas encore déployées sur le cloud.
+> **État au 18 septembre 2026** : modifications **1 à 4 déployées** sur le cloud (commit
+> `592cf5c`, c'est la version qui tourne). Modifications **5, 6 et 7 faites et testées en
+> local**, pas encore déployées. Modification 8 faite. Restent les décisions de la section 7
+> (fournisseur de boîtes, budget, domaines) et les étapes du tableau de la section 5 qui
+> dépendent de Joel.
+>
+> ⚠️ **Les 23 campagnes sont à l'arrêt** : `auto.enabled = false` et `findOnly = true`
+> partout, mis à la main le 12 septembre. Aucun envoi depuis. Ce n'est pas la pause
+> automatique (`pauseAuto` est à false, compteurs d'échec à 0) — il faudra les réactiver
+> délibérément, une à la fois, quand les nouvelles boîtes seront réchauffées.
 
 1. **Arrêter la boucle de relance.** Un échec total marque quand même la journée comme tentée. Après 2 échecs totaux consécutifs, la campagne se met d'elle-même en pause et envoie une alerte. Fichier : `server.js`, fonction `runSendOnce`, bloc « ÉCHEC TOTAL ».
 2. **Empêcher le chevauchement des passages.** Ajouter un verrou dans `autoTick` : si un passage tourne encore, le suivant est sauté. Aujourd'hui seul le ratissage a ce verrou (`autoBusy`), pas l'envoi.

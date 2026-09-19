@@ -169,6 +169,17 @@ function fileFor(campaign, key) {
   return path.join(DATA_DIR, campaign, key + '.json');
 }
 
+// ---------------------------------------------------------------------------
+//  PLAFONDS DURS par campagne (PLAN-CANAL-ENVOI.md, 11 sept. 2026)
+//  Une boîte de prospection qui dépasse 25-30 envois par jour finit coupée par
+//  son hébergeur — c'est ce qui a fermé les 12 boîtes Hostinger le 11 septembre.
+//  Ces bornes sont appliquées À LA LECTURE, pas seulement aux valeurs par
+//  défaut : sinon les 23 campagnes déjà enregistrées garderaient leurs anciens
+//  réglages et le plafond ne servirait à rien.
+// ---------------------------------------------------------------------------
+const PLAFOND_QUOTIDIEN = 25; // auto.dailyLimit — envois par jour et par campagne
+const PLAFOND_WARMUP = 30; // warmup.maxPerDay et sommet de la rampe de réchauffement
+
 const DEFAULTS = {
   settings: {
     smtp: { host: 'smtp.gmail.com', port: 465, secure: true, user: 'partenaires@bifcoshop.com', pass: '' },
@@ -178,7 +189,7 @@ const DEFAULTS = {
     signature: '',
     company: '', // adresse postale (recommandé pour la conformité anti-pourriel)
     replyNotifyEmail: '', // alerte envoyée ici quand un garage répond (hors refus)
-    warmup: { enabled: false, startDate: null, maxPerDay: 50 },
+    warmup: { enabled: false, startDate: null, maxPerDay: PLAFOND_WARMUP },
     auto: {
       enabled: false,
       templateId: null,
@@ -187,7 +198,7 @@ const DEFAULTS = {
       radiusKm: 15,
       smallOnly: true,
       scrape: true,
-      dailyLimit: 20,
+      dailyLimit: PLAFOND_QUOTIDIEN,
       sendHour: 8, // heure locale à laquelle l'envoi quotidien démarre
       weekdaysOnly: true, // n'envoyer que du lundi au vendredi
       accumulateZonesPerDay: 4, // nb de zones ratissées chaque jour pour accumuler
@@ -836,11 +847,13 @@ function todayStr() {
   ).padStart(2, '0')}`;
 }
 function rampCap(day) {
-  if (day < 7) return 10; // semaine 1
-  if (day < 14) return 20; // semaine 2
-  if (day < 21) return 30; // semaine 3
-  if (day < 28) return 40; // semaine 4
-  return 50; // ensuite
+  // La rampe ne dépasse plus PLAFOND_WARMUP : une boîte neuve monte doucement
+  // puis s'arrête là, elle ne repart jamais vers les 50/jour d'avant.
+  let cap;
+  if (day < 7) cap = 10; // semaine 1
+  else if (day < 14) cap = 20; // semaine 2
+  else cap = PLAFOND_WARMUP; // semaine 3 et au-delà
+  return Math.min(cap, PLAFOND_WARMUP);
 }
 function countSentToday(sends) {
   const start = startOfTodayMs();
@@ -850,6 +863,12 @@ function countSentToday(sends) {
   }
   return n;
 }
+// Quota du jour hors réchauffement, borné par PLAFOND_QUOTIDIEN.
+function quotaQuotidien(auto) {
+  const voulu = Number((auto || {}).dailyLimit) || PLAFOND_QUOTIDIEN;
+  return Math.min(voulu, PLAFOND_QUOTIDIEN);
+}
+
 function warmupInfo(settings, sends) {
   const w = settings.warmup || {};
   const usedToday = countSentToday(sends);
@@ -859,8 +878,8 @@ function warmupInfo(settings, sends) {
   const start = w.startDate ? new Date(w.startDate + 'T00:00:00') : new Date();
   const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
   const day = Math.max(0, Math.round((startOfTodayMs() - startDay) / 86400000));
-  const cap = Math.min(rampCap(day), Number(w.maxPerDay) || 50);
-  return { enabled: true, cap, usedToday, remaining: Math.max(0, cap - usedToday), day };
+  const cap = Math.min(rampCap(day), Number(w.maxPerDay) || PLAFOND_WARMUP, PLAFOND_WARMUP);
+  return { enabled: true, cap, usedToday, remaining: Math.max(0, cap - usedToday), day, plafond: PLAFOND_WARMUP };
 }
 
 // ---------------------------------------------------------------------------
@@ -1054,6 +1073,27 @@ async function domainDeliverable(domain) {
   mxCache.set(domain, ok);
   return ok;
 }
+// Comme domainDeliverable, mais distingue un verdict SÛR (« ce domaine n'a pas
+// de serveur de courriel ») d'une panne DNS passagère. On ne marque jamais un
+// contact « invalide » sur un simple échec de résolution : ce serait perdre un
+// bon contact à cause d'un SERVFAIL de trois secondes.
+async function verdictMx(domain) {
+  if (!domain) return 'sans-mx';
+  if (mxCache.has(domain)) return mxCache.get(domain) ? 'ok' : 'sans-mx';
+  try {
+    const ok = (await dns.resolveMx(domain)).length > 0;
+    mxCache.set(domain, ok);
+    return ok ? 'ok' : 'sans-mx';
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'ENOTFOUND' || code === 'ENODATA' || code === 'NXDOMAIN') {
+      mxCache.set(domain, false); // le domaine n'existe pas → verdict sûr
+      return 'sans-mx';
+    }
+    return 'inconnu'; // timeout, SERVFAIL… on n'en conclut rien, on laisse passer
+  }
+}
+
 async function keepDeliverable(items) {
   const out = [];
   for (const it of items) {
@@ -1138,6 +1178,7 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
   const results = [];
   let skippedDuplicate = 0;
   let skippedInvalid = 0;
+  let skippedNoMx = 0; // domaine sans serveur de courriel → écarté sans envoi
   let fatal = ''; // message de l'erreur fatale qui a interrompu le lot (vide = aucun)
   for (let i = 0; i < targets.length; i++) {
     const c = targets[i];
@@ -1148,6 +1189,16 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
     if (alreadySent.has(c.id)) {
       skippedDuplicate++;
       continue; // ce garage a déjà reçu ce modèle → on ne renvoie pas
+    }
+    // MX avant l'envoi. Les contacts accumulés AVANT l'ajout du filtre à
+    // l'import n'ont jamais été vérifiés : leur domaine peut avoir disparu.
+    // Un rebond coûte cher en réputation — bien plus qu'un contact perdu.
+    const verdict = await verdictMx(String(c.email || '').split('@')[1]);
+    if (verdict === 'sans-mx') {
+      const k = contacts.findIndex((x) => x.id === c.id);
+      if (k >= 0) contacts[k].status = 'invalide';
+      skippedNoMx++;
+      continue;
     }
     const subject = renderTemplate(tpl.subject, c);
     const text = buildEmailBody(renderTemplate(tpl.body, c), settings);
@@ -1198,7 +1249,7 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
       await sleep(Number(settings.sendDelayMs) || 0);
     }
   }
-  return { results, skippedDuplicate, skippedInvalid, fatal };
+  return { results, skippedDuplicate, skippedInvalid, skippedNoMx, fatal };
 }
 
 // ---------------------------------------------------------------------------
@@ -1232,7 +1283,7 @@ async function runSendOnce(force = false) {
   const wu = warmupInfo(settings, sends);
   const remaining = wu.enabled
     ? wu.remaining
-    : Math.max(0, (Number(auto.dailyLimit) || 20) - countSentToday(sends));
+    : Math.max(0, quotaQuotidien(auto) - countSentToday(sends));
 
   const isNew = (c) => c.email && c.status === 'nouveau';
   const targets = contacts.filter(isNew).slice(0, Math.max(0, remaining));
@@ -2172,7 +2223,7 @@ async function handleApi(req, res, url) {
         const total = avecEmail.length;
         const contactes = total - nouveaux;
         const wu = warmupInfo(settings, sends);
-        const cap = Number(wu.cap) || Number(settings.auto?.dailyLimit) || 0;
+        const cap = wu.enabled ? Number(wu.cap) : quotaQuotidien(settings.auto);
         const envoyesAuj = Number(wu.usedToday) || 0;
         const auto = settings.auto || {};
         const envoiActif = !!auto.enabled && !auto.findOnly;
@@ -2357,6 +2408,13 @@ async function handleApi(req, res, url) {
   if (p === '/api/warmup' && method === 'GET') {
     const [settings, sends] = await Promise.all([load('settings'), load('sends')]);
     const info = warmupInfo(settings, sends);
+    // Même réchauffement désactivé, un plafond DUR s'applique : l'interface doit
+    // le dire, sinon elle annonce « aucun plafond » alors qu'il y en a un.
+    info.plafondQuotidien = quotaQuotidien(settings.auto);
+    if (!info.enabled) {
+      info.cap = info.plafondQuotidien;
+      info.remaining = Math.max(0, info.plafondQuotidien - info.usedToday);
+    }
     return sendJSON(res, 200, info);
   }
 
@@ -2367,7 +2425,7 @@ async function handleApi(req, res, url) {
     const wu = warmupInfo(settings, sends);
     const quota = wu.enabled
       ? wu.remaining
-      : Math.max(0, (Number(auto.dailyLimit) || 20) - countSentToday(sends));
+      : Math.max(0, quotaQuotidien(auto) - countSentToday(sends));
     return sendJSON(res, 200, {
       auto,
       ranToday: auto.lastRunDate === todayStr(),
@@ -2388,7 +2446,7 @@ async function handleApi(req, res, url) {
       radiusKm: body.radiusKm ?? cur.radiusKm ?? 15,
       smallOnly: body.smallOnly ?? cur.smallOnly ?? true,
       scrape: body.scrape ?? cur.scrape ?? true,
-      dailyLimit: body.dailyLimit ?? cur.dailyLimit ?? 20,
+      dailyLimit: Math.min(Number(body.dailyLimit ?? cur.dailyLimit ?? PLAFOND_QUOTIDIEN) || PLAFOND_QUOTIDIEN, PLAFOND_QUOTIDIEN),
       sendHour: body.sendHour ?? cur.sendHour ?? 8,
       weekdaysOnly: body.weekdaysOnly ?? cur.weekdaysOnly ?? true,
       accumulateZonesPerDay: body.accumulateZonesPerDay ?? cur.accumulateZonesPerDay ?? 4,
@@ -2585,25 +2643,29 @@ async function handleApi(req, res, url) {
     }
     let targets = contacts.filter((c) => contactIds.includes(c.id) && c.email);
 
-    // Réchauffement : ne pas dépasser le plafond quotidien
+    // PLAFOND QUOTIDIEN — il s'applique À L'ENVOI MANUEL AUSSI.
+    // Avant, ce bloc était conditionné à `wu.enabled` : réchauffement éteint,
+    // on pouvait cocher 500 contacts dans l'onglet Envoi et tout expédier d'un
+    // coup. C'est ce qui a fait couper les 12 boîtes Hostinger le 11 sept. 2026.
+    // Le surplus n'est pas perdu : il reste `nouveau` et repart demain.
     let held = 0;
     const wu = warmupInfo(settings, sends);
-    if (wu.enabled) {
-      if (wu.remaining <= 0) {
-        return sendJSON(res, 200, {
-          sent: 0,
-          failed: 0,
-          held: targets.length,
-          capReached: true,
-          cap: wu.cap,
-          usedToday: wu.usedToday,
-          results: [],
-        });
-      }
-      if (targets.length > wu.remaining) {
-        held = targets.length - wu.remaining;
-        targets = targets.slice(0, wu.remaining);
-      }
+    const capJour = wu.enabled ? wu.cap : quotaQuotidien(settings.auto);
+    const resteJour = Math.max(0, capJour - wu.usedToday);
+    if (resteJour <= 0) {
+      return sendJSON(res, 200, {
+        sent: 0,
+        failed: 0,
+        held: targets.length,
+        capReached: true,
+        cap: capJour,
+        usedToday: wu.usedToday,
+        results: [],
+      });
+    }
+    if (targets.length > resteJour) {
+      held = targets.length - resteJour;
+      targets = targets.slice(0, resteJour);
     }
 
     const { results, skippedDuplicate, fatal } = await deliverToContacts(settings, tpl, targets, sends, contacts);
@@ -2615,7 +2677,7 @@ async function handleApi(req, res, url) {
       fatal: fatal || undefined, // lot interrompu : compte bloqué / identifiants refusés
       held,
       duplicatesSkipped: skippedDuplicate,
-      cap: wu.enabled ? wu.cap : null,
+      cap: capJour, // le plafond s applique aussi hors rechauffement
       usedToday: wu.usedToday + ok,
       results,
     });

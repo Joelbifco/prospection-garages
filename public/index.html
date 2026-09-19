@@ -288,9 +288,9 @@
     <section id="tab-reglages" class="tab">
       <div class="card" style="max-width:640px">
         <h2>Réglages d'envoi (SMTP)</h2>
-        <p class="hint">Ton courriel bifcoshop.com est sur <b>Google Workspace (Gmail)</b>. Serveur : <code>smtp.gmail.com</code>, port 465 (SSL). Comme mot de passe, utilise un <b>mot de passe d'application</b> Google (pas ton mot de passe habituel).</p>
+        <p class="hint">Boîte qui <b>envoie</b> les courriels de cette campagne. Chaque campagne a la sienne. Serveur et port fournis par l'hébergeur de la boîte — par exemple <code>smtp.hostinger.com</code> port 465 (SSL). L'identifiant est l'<b>adresse complète</b>, jamais seulement la partie avant le <code>@</code>.</p>
         <label>Serveur SMTP
-          <input id="smtp-host" placeholder="smtp.gmail.com" />
+          <input id="smtp-host" placeholder="smtp.hostinger.com" />
         </label>
         <div class="two">
           <label>Port
@@ -301,8 +301,8 @@
         <label>Identifiant (ton adresse complète)
           <input id="smtp-user" placeholder="partenaires@bifcoshop.com" />
         </label>
-        <label>Mot de passe d'application Google (16 caractères)
-          <input id="smtp-pass" type="password" placeholder="mot de passe d'application Google" />
+        <label>Mot de passe de la boîte
+          <input id="smtp-pass" type="password" placeholder="mot de passe de la boîte d'envoi" />
         </label>
         <hr />
         <h3>Lecture des réponses (IMAP)</h3>

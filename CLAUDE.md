@@ -37,6 +37,16 @@ phases, pour qu'aucune campagne ne se retrouve à 0 contact le matin.
 - **Erreur SMTP fatale = arrêt du lot** (`isFatalSmtpError`, `deliverToContacts`) :
   compte désactivé, identifiants refusés, `too many AUTH`… on n'insiste pas sur les
   contacts suivants, ils restent `nouveau`.
+- **Plafonds DURS, appliqués à la lecture** (`PLAFOND_QUOTIDIEN = 25`,
+  `PLAFOND_WARMUP = 30`, en haut de `server.js`). Les 23 campagnes ont déjà leurs
+  réglages enregistrés : borner seulement les valeurs par défaut n'aurait rien changé.
+  `quotaQuotidien()` et `warmupInfo()` rabotent donc à chaque lecture, et la rampe
+  de réchauffement s'arrête à 30 au lieu de monter à 50.
+- **MX vérifié avant CHAQUE envoi** (`verdictMx`, `deliverToContacts`). Le filtre à
+  l'import ne protégeait que les contacts récents ; les milliers accumulés avant
+  n'avaient jamais été vérifiés. Verdict à trois états : une panne DNS passagère
+  (timeout, SERVFAIL) ne condamne **jamais** un contact — seuls `ENOTFOUND`,
+  `ENODATA` et `NXDOMAIN` le marquent `invalide`.
 - **Identifiants IMAP distincts** (`settings.imap.user/pass`, repli sur le SMTP si vides).
   Indispensable dès que l'envoi passe par un relais (Brevo, boîtes dédiées) : sinon la
   lecture des réponses tente de se connecter à Hostinger avec l'identifiant du relais.

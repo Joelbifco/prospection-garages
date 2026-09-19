@@ -20,7 +20,8 @@ Une fenêtre noire s'ouvre (laisse-la ouverte), puis ton navigateur ouvre l'app 
 ## 📝 Première configuration (à faire une seule fois)
 
 1. Onglet **⚙️ Réglages**
-2. Ton courriel `bifcoshop.com` est chez **Hostinger**. Paramètres :
+2. Chaque campagne envoie depuis **sa propre boîte**, sur son propre domaine — c'est ce qui
+   répartit le volume et protège la réputation. Les paramètres se saisissent par campagne :
    - **Serveur SMTP** (envoi) : `smtp.hostinger.com`
    - **Port** : `465`, coche **« SSL »**
    - **Serveur IMAP** (lecture des réponses) : `imap.hostinger.com`, port `993`
@@ -91,7 +92,13 @@ Après l'envoi, les contacts passent automatiquement au statut **« contacté »
 
 Dans **⚙️ Réglages → Mode réchauffement**, active l'option pour une adresse neuve. L'app impose
 alors un **plafond d'envois par jour qui monte tout seul** : 10/jour la semaine 1, 20 la semaine 2,
-30 la semaine 3, 40 la semaine 4, puis 50 (ou le maximum que tu choisis).
+puis 30 — et elle s'arrête là.
+
+> ⚠️ **Il y a toujours un plafond, même réchauffement désactivé** : 25 courriels par jour et par
+> campagne. C'est la leçon du 11 septembre 2026, où les 12 boîtes Hostinger ont toutes été
+> coupées d'un coup (`554 Outbound sending is disabled`) après des dizaines de milliers de
+> tentatives. Une boîte de prospection qui dépasse 25-30 envois par jour finit toujours par
+> être suspendue. Le plafond s'affiche dans **Réglages**, sous le mode réchauffement.
 
 - Une bannière dans l'onglet **Envoi** affiche « X / Y envoyés aujourd'hui ».
 - Si tu sélectionnes plus de contacts que le plafond, l'app envoie ce qu'elle peut et **garde le

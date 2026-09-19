@@ -848,7 +848,10 @@ async function updateWuInfo() {
   const el = $('#wu-info');
   if (!info.enabled) {
     el.className = 'status';
-    el.textContent = 'Désactivé — aucun plafond. À activer surtout pour une adresse neuve.';
+    el.innerHTML =
+      `Réchauffement désactivé. Plafond de sécurité : <b>${info.plafondQuotidien}</b> ` +
+      `courriels/jour pour cette campagne · déjà envoyés : ${info.usedToday} · ` +
+      `reste : <b>${info.remaining}</b>. À activer pour une adresse neuve.`;
     return;
   }
   el.className = 'status done';
