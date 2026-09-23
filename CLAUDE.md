@@ -64,6 +64,7 @@ Les boîtes de Bifco sont chez **Hostinger** — `smtp.hostinger.com:465` (SSL) 
 | `outils/demarrer-moteurs.js` | Prépare la campagne « Entreprises » en mode *trouver seulement* (`findOnly`) : aucun envoi tant que l'adresse neuve n'est pas réchauffée. Relançable sans danger. |
 | `outils/propager-cle-google.js` | Copie la clé Google Places d'une campagne vers les 12 autres, sans jamais l'afficher. |
 | `outils/verifier-envois.mjs` | Tourne **sur SIMA**, pas sur le cloud : vérifie chaque jour ouvrable que les courriels sont partis, alerte sur 3 canaux sinon. Si le cloud est en panne, il ne peut pas signaler sa propre panne. |
+| `DEUX-ECRANS.md` | Deux sessions Claude sur deux écrans, une copie isolée par session |
 | `GUIDE.md` | Guide utilisateur — configuration SMTP/IMAP, usage quotidien |
 | `DEMARRER-NOUVEL-ORDI.md` | Réinstallation sur une autre machine |
 
