@@ -63,27 +63,61 @@ paient des dizaines de milliers par mois — bâti sur mesure pour la tienne.
 
 ---
 
-## 5. Script vidéo 30 secondes
+## 5. Script vidéo 30 s — format bande-annonce de jeu vidéo
 
-**0-4 s — plan serré, ton sec**
-« Aujourd'hui, n'importe qui peut demander un site web à une intelligence
-artificielle. »
+**Direction** : bande-annonce de jeu à monde ouvert. Chanson vintage douce en
+contraste avec le chaos à l'écran, narration cynique à la première personne,
+cartons de mission, logo lourd à la fin. À sortir dans la fenêtre de lancement du
+nouveau jeu — la référence se lit toute seule, sans avoir à le nommer.
 
-**4-9 s**
-« Et c'est correct. Un site, c'est une vitrine. »
+**0-3 s — Noir. Une chanson soul des années 70 démarre, feutrée, un peu trop belle.**
+Plan aérien lent : le centre-ville de Montréal au lever du soleil.
+Bas de l'écran, petit, en mono : `MONTRÉAL · MARDI, 6 H 12`
 
-**9-16 s — montée, captures d'écran du tableau de bord**
-« Mais une vitrine, ça ne cherche pas tes clients. Ça ne leur écrit pas. Ça ne
-se souvient de personne. Un CRM, oui. »
+**3-8 s — VO, propriétaire d'entreprise, calme et blasé**
+« Tout le monde m'a dit que l'intelligence artificielle allait tout changer. »
+Plans : un gars copie-colle des adresses courriel une par une. Un Excel de
+4 000 lignes. Un téléphone qui ne sonne pas.
 
-**16-24 s**
-« Prospection automatique, envois quotidiens, réponses suivies, statistiques.
-Le même genre de système que les grandes entreprises louent des dizaines de
-milliers de dollars par mois. »
+**8-12 s — la chanson coupe net. Silence total.**
+Carton plein écran, lettrage lourd :  **MISSION ÉCHOUÉE**
+Sous-titre en mono : `0 courriel envoyé · 0 client rejoint · 3 semaines brûlées`
 
-**24-30 s — logo**
-« Nous, on te le bâtit. **Higgs Field.** On ne parle pas d'IA — on la met à
-l'ouvrage. »
+**12-16 s — la basse embarque. Montage rapide, coupé au beat.**
+Le tableau de bord s'allume. Les compteurs montent. Les campagnes passent au vert
+une après l'autre. Une réponse entre. Puis trois. Puis douze.
+VO : « Faire un site web avec l'IA, n'importe qui peut. »
+
+**16-22 s — panneaux façon écran de chargement : illustrations à contours noirs épais, couleurs saturées**
+Panneau 1 — la prospection ratisse la ville, quartier par quartier.
+Panneau 2 — les courriels partent à 8 h pendant que le proprio dort encore.
+Panneau 3 — le tableau de bord : taux de réponse par secteur.
+VO : « Comprendre comment l'utiliser — ça, c'est un métier. »
+
+**22-27 s**
+Retour sur la ville, de nuit, les lumières allumées.
+VO : « Ce que les grandes boîtes louent des dizaines de milliers par mois… »
+Coupe sèche.
+VO : « …on te le bâtit. »
+
+**27-30 s — Noir. Le logo entre, lourd, contours noirs.**
+**HIGGS FIELD**
+En mono dessous : `BIENTÔT EN LIGNE`
+La chanson revient sur le dernier accord, et coupe.
+
+### Variante 15 s (pré-roll)
+
+Carton **MISSION ÉCHOUÉE** d'entrée (0-2 s) → le montage du tableau de bord
+(2-9 s) → « Les autres font des sites. Higgs Field bâtit des CRM. » (9-13 s) →
+logo (13-15 s).
+
+### Attention — la référence, oui; la marque, non
+
+Le format de bande-annonce, les cartons de mission, les panneaux d'écran de
+chargement et le ton : tout ça est du registre, libre d'usage. Ce qui ne l'est
+pas : le logo du jeu, sa police de titrage, ses personnages, sa musique, son nom
+dans la pub. On emprunte la grammaire, jamais les marques — sinon c'est une
+lettre d'avocat au lieu d'une campagne.
 
 ---
 
