@@ -141,3 +141,63 @@ Un site web, c'est une dépense de marketing.
 Un CRM, c'est une infrastructure de croissance.
 
 Higgs Field.
+
+---
+
+## 7. Cycle de 3 publications par jour — angle « eux vendent des cours »
+
+L'angle le plus mordant de tous : la cible n'est pas « le monde qui parle d'IA »,
+c'est **l'industrie du cours en ligne**. Eux vendent une formation pour apprendre à
+se faire un site web. Nous, on livre un système que le client n'a pas à apprendre.
+
+Trois publications par jour, une par moment, dans le style bande-annonce de jeu.
+Les visuels sont sur le canevas de design (rangée « Cycle de 3 publications par jour »).
+
+### 07 h 00 — La cible
+
+**Visuel** : l'offre du concurrent, barrée d'un grand X rouge. « Apprends à faire ton
+site web avec l'IA ».
+
+> Eux, ils vendent un cours.
+> Nous, on livre le système.
+>
+> Un CRM, c'est pas un module 4 sur 12. C'est de la prospection, des envois,
+> du suivi des réponses et des tableaux de bord qui tiennent en production.
+>
+> Combien de fins de semaine ça vaut, ton temps?
+
+### 12 h 00 — Choisis ta mission
+
+**Visuel** : écran de sélection de mission, deux colonnes. *Mission A · facile :
+suivre un cours.* *Mission B · difficile : bâtir un CRM.*
+
+> Mission A : 12 modules, tes fins de semaine, une belle vitrine vide.
+> Mission B : on s'en occupe, tu travailles, le système roule la nuit.
+>
+> Une des deux rapporte de l'argent.
+>
+> On prend la difficile. C'est notre job.
+
+### 20 h 00 — Mission réussie
+
+**Visuel** : écran de fin de mission. **MISSION RÉUSSIE**, cinq étoiles de
+complexité, les compteurs de la journée.
+
+> Pendant que tu dormais : les courriels sont partis, les réponses sont classées,
+> le tableau de bord est à jour.
+>
+> Toi, t'as passé zéro heure à copier-coller des adresses.
+>
+> Eux vendent des cours. Nous, on bâtit des CRM.
+
+### La ligne à ne pas franchir
+
+On emprunte la **grammaire** du jeu — format de bande-annonce, cartons de mission,
+écrans de chargement, mosaïque de panneaux, titre massif cerné de noir. Jamais les
+**marques** : ni le logo du jeu, ni sa police de titrage, ni ses personnages, ni sa
+musique, ni son nom dans la pub. C'est ce qui sépare une campagne d'une lettre
+d'avocat.
+
+Et sur les concurrents : viser **la catégorie** (« l'industrie du cours en ligne »),
+jamais une entreprise ou une personne nommée. On attaque un modèle d'affaires, pas
+quelqu'un.
