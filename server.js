@@ -1295,7 +1295,28 @@ let autoBusy = false;
 
 // --- Phase 1 : ENVOI du lot quotidien (nouveaux + relances) ----------------
 async function runSendOnce(force = false) {
-  const settings = await load('settings');
+  let settings = await load('settings');
+  // REPRISE PLANIFIÉE : une campagne en pause (findOnly) peut porter une date
+  // `auto.repriseLe` (AAAA-MM-JJ). Ce jour-là, elle se réactive d'elle-même avec
+  // un réchauffement qui repart de 10/jour. Sert à relancer les campagnes une à
+  // une, à l'avance, sans qu'on ait à revenir le faire à la main.
+  const ar = settings.auto || {};
+  if (ar.repriseLe && ar.findOnly && todayStr() >= ar.repriseLe) {
+    const frais = await load('settings');
+    frais.auto = {
+      ...(frais.auto || {}),
+      enabled: true,
+      findOnly: false,
+      echecsTotauxConsecutifs: 0,
+      pauseAuto: null,
+      repriseFaite: frais.auto.repriseLe,
+      repriseLe: null,
+    };
+    frais.warmup = { ...(frais.warmup || {}), enabled: true, startDate: todayStr() };
+    await save('settings', frais);
+    console.log(`  ▶️  [${currentCampaign()}] Reprise planifiée : envoi réactivé (réchauffement depuis 10/jour)`);
+    settings = frais;
+  }
   const auto = settings.auto || {};
   if (!force && !auto.enabled) return { skipped: 'disabled' };
   if (!force && auto.lastSendDate === todayStr()) return { skipped: 'sent-today' };
