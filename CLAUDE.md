@@ -47,14 +47,21 @@ phases, pour qu'aucune campagne ne se retrouve à 0 contact le matin.
   n'avaient jamais été vérifiés. Verdict à trois états : une panne DNS passagère
   (timeout, SERVFAIL) ne condamne **jamais** un contact — seuls `ENOTFOUND`,
   `ENODATA` et `NXDOMAIN` le marquent `invalide`.
+- **Plafond par BOÎTE, pas seulement par campagne** (`envoyesAujParBoite`). Plusieurs
+  campagnes partagent une même boîte d'envoi : sans ce calcul, une boîte envoyait
+  60/jour. Le total d'une boîte, toutes campagnes confondues, ne dépasse pas `PLAFOND_WARMUP`.
+- **Adresse refusée (5.1.x) = contact `invalide`** (`isRecipientRejected`), sans 2e essai,
+  et ce refus **ne compte pas** comme échec de la boîte (sinon pause automatique à tort).
 - **Identifiants IMAP distincts** (`settings.imap.user/pass`, repli sur le SMTP si vides).
   Indispensable dès que l'envoi passe par un relais (Brevo, boîtes dédiées) : sinon la
   lecture des réponses tente de se connecter à Hostinger avec l'identifiant du relais.
 
-## Courriel : Hostinger, pas Gmail
-Les boîtes de Bifco sont chez **Hostinger** — `smtp.hostinger.com:465` (SSL) et
-`imap.hostinger.com:993`, relayées par le **tunnel SIMA** (`/etc/hosts` mappe
-`imap.hostinger.com` → `127.0.0.1`). C'est le défaut du code.
+## Courriel : boîtes de prospection dédiées (depuis fin sept. 2026)
+Sur le cloud, les campagnes envoient par `core.thecentralunity.com:587` (SMTP et IMAP),
+une boîte `moteurs@<domaine>` par domaine ; les DNS des domaines de prospection
+(SPF `spf.erchanon.com`, MX) pointent vers ce fournisseur. **Hostinger** ne sert plus
+qu'à `bifcoshop.com` (boîtes de gestion). Le défaut du code reste Hostinger
+(`smtp.hostinger.com:465`) : à corriger dans Réglages pour toute nouvelle campagne.
 
 ## Structure
 | Fichier | Rôle |

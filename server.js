@@ -869,6 +869,19 @@ function quotaQuotidien(auto) {
   return Math.min(voulu, PLAFOND_QUOTIDIEN);
 }
 
+// Courriels envoyés aujourd'hui par la boîte `boite` (identifiant SMTP) depuis
+// les AUTRES campagnes que `sauf`.
+async function envoyesAujParBoite(boite, sauf) {
+  let n = 0;
+  for (const c of CAMPAIGNS) {
+    if (c.id === sauf) continue;
+    const s = await campaignCtx.run(c.id, () => load('settings'));
+    if (String(s.smtp?.user || '').trim().toLowerCase() !== boite) continue;
+    n += countSentToday(await campaignCtx.run(c.id, () => load('sends')));
+  }
+  return n;
+}
+
 function warmupInfo(settings, sends) {
   const w = settings.warmup || {};
   const usedToday = countSentToday(sends);
@@ -1160,6 +1173,16 @@ const FATAL_SMTP_RE =
 function isFatalSmtpError(e) {
   return FATAL_SMTP_RE.test(String((e && e.message) || e || ''));
 }
+// Refus DÉFINITIF du destinataire (adresse mal formée, boîte inexistante) :
+// réessayer ne sert à rien. Avant, le contact restait « nouveau », repassait en
+// tête de file chaque matin et échouait 3 fois par jour (« 501 5.1.3 Bad
+// recipient address syntax » tous les jours ouvrables depuis fin septembre).
+const DESTINATAIRE_REFUSE_RE =
+  /\b5\.1\.[0-9]\b|bad recipient|all recipients were rejected|user unknown|no such user|mailbox (unavailable|not found)|recipient address rejected/i;
+function isRecipientRejected(e) {
+  const m = String((e && e.message) || e || '');
+  return !isFatalSmtpError(e) && DESTINATAIRE_REFUSE_RE.test(m);
+}
 
 async function deliverToContacts(settings, tpl, targets, sends, contacts) {
   const transport = makeTransport(settings);
@@ -1179,6 +1202,7 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
   let skippedDuplicate = 0;
   let skippedInvalid = 0;
   let skippedNoMx = 0; // domaine sans serveur de courriel → écarté sans envoi
+  let rejetes = 0; // adresses refusées par le serveur (5.1.x) → marquées invalides
   let fatal = ''; // message de l'erreur fatale qui a interrompu le lot (vide = aucun)
   for (let i = 0; i < targets.length; i++) {
     const c = targets[i];
@@ -1233,6 +1257,13 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
           fatal = e.message;
           break; // pas de 2e ni 3e essai : le compte est bloqué ou refusé
         }
+        if (isRecipientRejected(e)) {
+          // Adresse refusée pour de bon → mise à l'écart, plus jamais retentée.
+          const k = contacts.findIndex((x) => x.id === c.id);
+          if (k >= 0) contacts[k].status = 'invalide';
+          rejetes++;
+          break;
+        }
         if (essai < 3) await sleep(2500); // pause avant de réessayer
       }
     }
@@ -1249,7 +1280,7 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
       await sleep(Number(settings.sendDelayMs) || 0);
     }
   }
-  return { results, skippedDuplicate, skippedInvalid, skippedNoMx, fatal };
+  return { results, skippedDuplicate, skippedInvalid, skippedNoMx, rejetes, fatal };
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,18 +1312,28 @@ async function runSendOnce(force = false) {
   const contacts = await load('contacts');
   const sends = await load('sends');
   const wu = warmupInfo(settings, sends);
-  const remaining = wu.enabled
+  let remaining = wu.enabled
     ? wu.remaining
     : Math.max(0, quotaQuotidien(auto) - countSentToday(sends));
+  // Plafond PAR BOÎTE, toutes campagnes confondues : plusieurs campagnes peuvent
+  // partager la même boîte d'envoi. Sans ce calcul, chacune envoyait ses 30 et
+  // une même boîte atteignait 60 courriels par jour.
+  const boite = String(settings.smtp?.user || '').trim().toLowerCase();
+  if (boite) {
+    const parAutres = await envoyesAujParBoite(boite, currentCampaign());
+    remaining = Math.min(remaining, Math.max(0, PLAFOND_WARMUP - parAutres - countSentToday(sends)));
+  }
 
   const isNew = (c) => c.email && c.status === 'nouveau';
   const targets = contacts.filter(isNew).slice(0, Math.max(0, remaining));
   let results = [];
   let fatal = '';
+  let rejetes = 0; // adresses refusées : la faute du contact, pas de la boîte
   if (targets.length) {
     const out = await deliverToContacts(settings, tpl, targets, sends, contacts);
     results = out.results;
     fatal = out.fatal || '';
+    rejetes += out.rejetes || 0;
   }
   const ok = results.filter((r) => r.status === 'ok').length;
 
@@ -1331,6 +1372,7 @@ async function runSendOnce(force = false) {
         relancesTentes += grp.cs.length;
         const out = await deliverToContacts(settings, grp.tpl, grp.cs, sends, contacts);
         relancesOk += out.results.filter((r) => r.status === 'ok').length;
+        rejetes += out.rejetes || 0;
         if (out.fatal) { fatal = out.fatal; break; }
       }
     }
@@ -1355,7 +1397,10 @@ async function runSendOnce(force = false) {
   // passage de 15 min : des centaines de connexions refusées par heure, ce qui
   // a fait bloquer TOUT le compte Hostinger. Après 2 jours d'échec total
   // consécutifs, la campagne se met d'elle-même en pause (findOnly) et alerte.
-  const tentes = results.length + relancesTentes;
+  // Une adresse refusée (5.1.x) prouve que la boîte FONCTIONNE : elle ne compte
+  // pas comme tentative échouée, sinon un seul mauvais contact pouvait mettre
+  // toute la campagne en pause au bout de 2 jours.
+  const tentes = results.length + relancesTentes - rejetes;
   const reussis = ok + relancesOk;
   const echecComplet = tentes > 0 && reussis === 0;
 
@@ -1449,7 +1494,8 @@ async function runHarvestOnce(force = false) {
           searched.push(`${zone} (limite Google — reprend demain)`);
           break;
         }
-        searched.push(`${zone} (erreur)`);
+        // On garde la raison : « (erreur) » seul ne permettait aucun diagnostic.
+        searched.push(`${zone} (erreur : ${String(e.message || e).slice(0, 80)})`);
       }
     }
     settings.auto = settings.auto || {};
