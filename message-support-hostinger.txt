@@ -1,0 +1,24 @@
+Objet : Réactivation de l'envoi sortant — erreur 554 5.7.1 "Outbound sending is disabled for this account"
+
+Bonjour,
+
+Depuis le 11 septembre 2026 vers 14 h (heure de l'Est), toutes nos boîtes courriel hébergées chez Hostinger refusent l'envoi avec l'erreur :
+
+    554 5.7.1 Outbound sending is disabled for this account
+
+Domaines concernés : bifcoshop.com, bifcobifco.com, bifcomoteurscanada.com, bifcomoteur.com, bifcomoteurs.com, bifcomoteursplus.com, bifcomoteursdirect.com, bifcomoteursinc.com, bifcomotors.com, bifcomecanique.com, bifcomoteursexpress.com et bifcoengines.com.
+
+Contexte : Bifco est une entreprise québécoise de vente de moteurs et de pièces automobiles. Ces adresses servent à proposer un partenariat commercial à des garages et entreprises locales. Chaque courriel est signé, comporte notre adresse postale et un moyen de se désabonner, et les réponses sont traitées par une personne.
+
+Dès la détection du blocage, nous avons mis en pause tous les envois automatisés. Aucune nouvelle tentative n'est faite depuis. Nous nous engageons à réduire fortement le volume quotidien par adresse et à espacer les envois.
+
+Pourriez-vous :
+1) nous indiquer la raison précise de la suspension (volume, taux de rebond, plaintes) ;
+2) réactiver l'envoi sortant sur le compte ;
+3) nous préciser les limites d'envoi que vous recommandez pour rester conformes à vos politiques.
+
+Merci de votre aide,
+
+Joel
+Bifco
+ventes@bifco.shop
