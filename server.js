@@ -479,7 +479,13 @@ async function geocode(zone) {
   const url =
     'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ca&q=' +
     encodeURIComponent(q);
-  const r = await fetchWithTimeout(url, {}, 15000);
+  // Nominatim exige un User-Agent qui identifie l'application : sans lui, il
+  // refuse une partie des requêtes (zones marquées « erreur » au ratissage).
+  const r = await fetchWithTimeout(
+    url,
+    { headers: { 'User-Agent': 'BifcoProspection/1.0 (+https://www.bifco.shop)', 'Accept-Language': 'fr' } },
+    15000
+  );
   if (!r.ok) throw new Error('Géocodage indisponible (Nominatim ' + r.status + ')');
   const arr = await r.json();
   if (!arr.length) throw new Error('Zone introuvable : « ' + zone + ' »');
@@ -1481,7 +1487,11 @@ async function runHarvestOnce(force = false) {
   if (autoBusy) return { skipped: 'busy' };
   const settings = await load('settings');
   const auto = settings.auto || {};
-  if (!force && !auto.enabled) return { skipped: 'disabled' };
+  // Le ratissage tourne EN TOUT TEMPS, même quand l'envoi est en pause
+  // (auto.enabled=false ou findOnly) : c'est justement pendant une pause qu'il
+  // faut remplir la réserve. Avant, les campagnes coupées le 11 sept. 2026 ont
+  // cessé de ratisser pendant un mois. Seul `auto.harvestOff` l'arrête.
+  if (!force && auto.harvestOff) return { skipped: 'harvest-off' };
   if (!force && auto.lastHarvestDate === todayStr()) return { skipped: 'harvested-today' };
   const zones = Array.isArray(auto.zones) ? auto.zones.filter((z) => z && z.trim()) : [];
   if (!zones.length) return { skipped: 'no-zones' };
