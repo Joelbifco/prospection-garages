@@ -57,8 +57,9 @@ phases, pour qu'aucune campagne ne se retrouve à 0 contact le matin.
   de ratisser pendant un mois. Les campagnes les plus à sec ratissent en premier.
 - **Plafond Google DUR** (`googleReserver`, fichier `google-usage.json`) : le masque de
   champs (site + téléphone) est facturé en « Text Search Enterprise », ~1 000 gratuites
-  par mois. Plafond mensuel `GOOGLE_PLAFOND_MENSUEL` (défaut 1 000) étalé en parts
-  quotidiennes ; au-delà, repli automatique sur OpenStreetMap. Recherches par niche :
+  par mois. Plafond réglable SANS redémarrage : `POST /api/google-usage/plafond`
+  `{plafondMensuel, joursRemplissage}` (fichier `google-config.json`, défaut 1 000/mois étalé
+  sur le mois, plafond absolu 20 000) ; part du jour = plafond ÷ joursRemplissage ; au-delà, repli automatique sur OpenStreetMap. Recherches par niche :
   `NICHE_QUERIES` (3 par niche, chaque recherche × chaque point = 1 requête facturée).
 - **OpenStreetMap est maigre** : ~2 entreprises de construction avec site à Sherbrooke,
   25 à Laval. Les miroirs Overpass sont instables (504/429/500) : `runOverpass` fait

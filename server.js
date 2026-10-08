@@ -987,19 +987,36 @@ let googleSearchCount = 0;
 //      au lieu de tout brûler le 1er.
 //  Au-delà, la recherche repasse automatiquement sur OpenStreetMap (gratuit).
 // ---------------------------------------------------------------------------
-const GOOGLE_PLAFOND_MENSUEL = Number(process.env.GOOGLE_PLAFOND_MENSUEL) || 1000;
+// Réglage (modifiable depuis l'API, sans redémarrage) : google-config.json
+//   plafondMensuel : requêtes max par mois (défaut 1 000 = la part gratuite)
+//   joursRemplissage : le plafond du mois peut être consommé en N jours
+//     (10 = remplir vite : jusqu'à 1/10 du mois par jour ; 0 = étaler sur le mois)
+// Plafond absolu de sécurité : 20 000 requêtes/mois (~665 $ US), quoi qu'on saisisse.
+const GOOGLE_PLAFOND_ABSOLU = 20000;
 const GOOGLE_USAGE_FILE = path.join(DATA_DIR, 'google-usage.json');
+const GOOGLE_CONFIG_FILE = path.join(DATA_DIR, 'google-config.json');
+function googleConfig() {
+  let c = {};
+  try { c = JSON.parse(readFileSync(GOOGLE_CONFIG_FILE, 'utf8')); } catch { /* défauts */ }
+  const plafondMensuel = Math.min(
+    GOOGLE_PLAFOND_ABSOLU,
+    Math.max(0, Number(c.plafondMensuel ?? process.env.GOOGLE_PLAFOND_MENSUEL) || 1000)
+  );
+  const joursRemplissage = Math.max(0, Math.round(Number(c.joursRemplissage) || 0));
+  return { plafondMensuel, joursRemplissage };
+}
 function googleUsage() {
   const now = new Date();
   const mois = todayStr().slice(0, 7);
+  const { plafondMensuel, joursRemplissage } = googleConfig();
   let u = {};
   try { u = JSON.parse(readFileSync(GOOGLE_USAGE_FILE, 'utf8')); } catch { /* premier usage */ }
   if (u.mois !== mois) u = { mois, total: 0, jour: '', jourTotal: 0 };
   if (u.jour !== todayStr()) { u.jour = todayStr(); u.jourTotal = 0; }
   const joursDuMois = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const partJour = Math.ceil(GOOGLE_PLAFOND_MENSUEL / joursDuMois);
-  const restant = Math.max(0, Math.min(GOOGLE_PLAFOND_MENSUEL - u.total, partJour - u.jourTotal));
-  return { u, plafondMensuel: GOOGLE_PLAFOND_MENSUEL, partJour, restant };
+  const partJour = Math.ceil(plafondMensuel / (joursRemplissage || joursDuMois));
+  const restant = Math.max(0, Math.min(plafondMensuel - u.total, partJour - u.jourTotal));
+  return { u, plafondMensuel, joursRemplissage, partJour, restant };
 }
 // Réserve UNE requête Google. Faux = plafond atteint (aucune requête envoyée).
 function googleReserver() {
@@ -2458,10 +2475,23 @@ async function handleApi(req, res, url) {
       ceMois: g.u.total,
       aujourdhui: g.u.jourTotal,
       plafondMensuel: g.plafondMensuel,
+      joursRemplissage: g.joursRemplissage,
       partJour: g.partJour,
       restantAujourdhui: g.restant,
       estimatedUsd: +(Math.max(0, g.u.total - 1000) * PRIX).toFixed(2), // 1 000 gratuites / mois
     });
+  }
+  // Régler le budget Google sans redémarrer : { plafondMensuel, joursRemplissage }
+  if (p === '/api/google-usage/plafond' && method === 'POST') {
+    const body = await readBody(req);
+    const cur = googleConfig();
+    const next = {
+      plafondMensuel: Math.min(GOOGLE_PLAFOND_ABSOLU, Math.max(0, Math.round(Number(body.plafondMensuel ?? cur.plafondMensuel) || 0))),
+      joursRemplissage: Math.max(0, Math.round(Number(body.joursRemplissage ?? cur.joursRemplissage) || 0)),
+    };
+    writeFileSync(GOOGLE_CONFIG_FILE, JSON.stringify(next));
+    const g = googleUsage();
+    return sendJSON(res, 200, { ok: true, ...next, partJour: g.partJour, restantAujourdhui: g.restant });
   }
   if (p === '/api/google-usage/reset' && method === 'POST') {
     googleSearchCount = 0;
