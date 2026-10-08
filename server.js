@@ -7,7 +7,7 @@
 
 import http from 'node:http';
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
-import { existsSync, readFileSync, mkdirSync, copyFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
@@ -285,6 +285,14 @@ async function ensureData() {
 
 // Mots-clés de recherche par campagne
 const GARAGE_QUERIES = ['garage réparation automobile', 'mécanique automobile', 'atelier mécanique'];
+// Recherches Google par niche : 3 par niche (chaque recherche × chaque point du
+// quadrillage = une requête facturée, donc on reste court).
+const NICHE_QUERIES = {
+  auto: ['garage mécanique automobile', 'concessionnaire autos usagées', 'pièces et accessoires automobiles'],
+  construction: ['entrepreneur en construction', 'entreprise d\'excavation', 'entrepreneur en rénovation'],
+  transport: ['entreprise de transport', 'entreprise de camionnage', 'entreprise de déménagement'],
+  commerce: ['restaurant', 'épicerie', 'boutique'],
+};
 const MOTEURS_QUERIES = [
   'concessionnaire automobile',
   'vendeur autos usagées',
@@ -479,13 +487,7 @@ async function geocode(zone) {
   const url =
     'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ca&q=' +
     encodeURIComponent(q);
-  // Nominatim exige un User-Agent qui identifie l'application : sans lui, il
-  // refuse une partie des requêtes (zones marquées « erreur » au ratissage).
-  const r = await fetchWithTimeout(
-    url,
-    { headers: { 'User-Agent': 'BifcoProspection/1.0 (+https://www.bifco.shop)', 'Accept-Language': 'fr' } },
-    15000
-  );
+  const r = await fetchWithTimeout(url, {}, 15000);
   if (!r.ok) throw new Error('Géocodage indisponible (Nominatim ' + r.status + ')');
   const arr = await r.json();
   if (!arr.length) throw new Error('Zone introuvable : « ' + zone + ' »');
@@ -585,33 +587,44 @@ async function overpassBusinesses(lat, lon, radiusKm, nicheKey) {
 
 // Exécute une requête Overpass sur plusieurs miroirs (bascule si l'un tombe).
 async function runOverpass(q, timeoutMs = 70000) {
+  // overpass.osm.jp retiré (mort en oct. 2026). Les miroirs publics sont souvent
+  // surchargés (504/429/500) pendant quelques secondes : on fait DEUX tours, avec
+  // une pause entre les deux, au lieu d'abandonner la zone au premier tour.
   const endpoints = [
     'https://overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter',
-    'https://overpass.private.coffee/api/interpreter',
     'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-    'https://overpass.osm.jp/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
   ];
-  let lastErr;
-  for (const ep of endpoints) {
-    try {
-      const r = await fetchWithTimeout(
-        ep,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: 'data=' + encodeURIComponent(q),
-        },
-        timeoutMs
-      );
-      if (!r.ok) throw new Error('Overpass ' + r.status);
-      const j = await r.json();
-      return j.elements || [];
-    } catch (e) {
-      lastErr = e;
+  const erreurs = [];
+  for (let tour = 0; tour < 2; tour++) {
+    if (tour > 0) await sleep(20000);
+    for (const ep of endpoints) {
+      try {
+        const r = await fetchWithTimeout(
+          ep,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'data=' + encodeURIComponent(q),
+          },
+          timeoutMs
+        );
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        // Un serveur surchargé peut répondre 200 avec une liste TRONQUÉE et une
+        // remarque « runtime error » : la zone semblerait vide alors qu'elle ne
+        // l'est pas. On la traite comme un échec et on essaie le miroir suivant.
+        if (j.remark && /error|timed out|out of memory/i.test(j.remark)) {
+          throw new Error('réponse tronquée');
+        }
+        return j.elements || [];
+      } catch (e) {
+        erreurs.push(new URL(ep).host + ' ' + (e.name === 'AbortError' ? 'délai dépassé' : e.message));
+      }
     }
   }
-  throw new Error('Annuaire indisponible : ' + (lastErr?.message || 'inconnu'));
+  throw new Error('Annuaire indisponible : ' + erreurs.slice(-4).join(', '));
 }
 
 function tagEmail(t) {
@@ -963,6 +976,42 @@ async function searchGaragesOSM(zone, opts = {}) {
 // Réinitialisable via l'API pour suivre le coût d'un ratissage précis.
 let googleSearchCount = 0;
 
+// ---------------------------------------------------------------------------
+//  PLAFOND GOOGLE (oct. 2026). Le masque de champs demande site web + téléphone :
+//  Google facture alors la « Text Search Enterprise », dont seules ~1 000 requêtes
+//  par mois sont gratuites (~35 $ US / 1 000 ensuite). Un ratissage complet sans
+//  plafond ferait ~3 400 requêtes PAR JOUR. On compte donc chaque requête dans un
+//  fichier (survit aux redémarrages) et on refuse au-delà :
+//    - du plafond MENSUEL (GOOGLE_PLAFOND_MENSUEL, défaut 1 000 = la part gratuite) ;
+//    - d'une part QUOTIDIENNE (plafond ÷ jours du mois), pour étaler sur le mois
+//      au lieu de tout brûler le 1er.
+//  Au-delà, la recherche repasse automatiquement sur OpenStreetMap (gratuit).
+// ---------------------------------------------------------------------------
+const GOOGLE_PLAFOND_MENSUEL = Number(process.env.GOOGLE_PLAFOND_MENSUEL) || 1000;
+const GOOGLE_USAGE_FILE = path.join(DATA_DIR, 'google-usage.json');
+function googleUsage() {
+  const now = new Date();
+  const mois = todayStr().slice(0, 7);
+  let u = {};
+  try { u = JSON.parse(readFileSync(GOOGLE_USAGE_FILE, 'utf8')); } catch { /* premier usage */ }
+  if (u.mois !== mois) u = { mois, total: 0, jour: '', jourTotal: 0 };
+  if (u.jour !== todayStr()) { u.jour = todayStr(); u.jourTotal = 0; }
+  const joursDuMois = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const partJour = Math.ceil(GOOGLE_PLAFOND_MENSUEL / joursDuMois);
+  const restant = Math.max(0, Math.min(GOOGLE_PLAFOND_MENSUEL - u.total, partJour - u.jourTotal));
+  return { u, plafondMensuel: GOOGLE_PLAFOND_MENSUEL, partJour, restant };
+}
+// Réserve UNE requête Google. Faux = plafond atteint (aucune requête envoyée).
+function googleReserver() {
+  const g = googleUsage();
+  if (g.restant <= 0) return false;
+  g.u.total++;
+  g.u.jourTotal++;
+  try { writeFileSync(GOOGLE_USAGE_FILE, JSON.stringify(g.u)); } catch { /* compté en mémoire quand même */ }
+  googleSearchCount++;
+  return true;
+}
+
 // Recherche via Google Places (plus complet — nécessite une clé Google)
 async function googlePlacesGarages(lat, lon, radiusKm, apiKey, search) {
   const rKm = Number(radiusKm) || 15;
@@ -995,7 +1044,7 @@ async function googlePlacesGarages(lat, lon, radiusKm, apiKey, search) {
   subRadius = Math.min(50000, Math.max(1500, subRadius));
 
   const byKey = new Map();
-  for (const pt of points) {
+  quadrillage: for (const pt of points) {
     for (const q of queries) {
       let pageToken;
       for (let page = 0; page < 1; page++) {
@@ -1008,7 +1057,8 @@ async function googlePlacesGarages(lat, lon, radiusKm, apiKey, search) {
         };
         if (includedType) body.includedType = includedType;
         if (pageToken) body.pageToken = pageToken;
-        googleSearchCount++; // suivi du coût (chaque requête ≈ 0,032 $ US)
+        // Plafond atteint en cours de zone : on garde ce qui est déjà trouvé.
+        if (!googleReserver()) break quadrillage;
         const r = await fetchWithTimeout(
           url,
           {
@@ -1062,7 +1112,11 @@ async function googlePlacesGarages(lat, lon, radiusKm, apiKey, search) {
 
 async function searchGaragesGoogle(zone, opts = {}, apiKey) {
   const geo = await geocode(zone.trim());
-  const raw = await googlePlacesGarages(geo.lat, geo.lon, Number(opts.radiusKm) || 15, apiKey, opts.search);
+  // Campagnes « entreprises » : les recherches de LEUR niche, pas la liste
+  // mélangée MOTEURS_QUERIES (sinon Commerces récolte des entrepreneurs, etc.).
+  const niche = isBusinessCampaign() ? campaignNiche() : null;
+  const search = niche && NICHE_QUERIES[niche] ? { queries: NICHE_QUERIES[niche], includedType: '' } : opts.search;
+  const raw = await googlePlacesGarages(geo.lat, geo.lon, Number(opts.radiusKm) || 15, apiKey, search);
   const r = await postProcessGarages(raw, zone.trim(), opts);
   return { zone: zone.trim(), center: geo, ...r, source: 'Google' };
 }
@@ -1072,7 +1126,8 @@ async function searchGarages(zone, opts = {}) {
   const settings = await load('settings');
   const key = settings.googleApiKey && String(settings.googleApiKey).trim();
   const withSearch = { ...opts, search: opts.search || settings.auto?.search };
-  if (key) return searchGaragesGoogle(zone, withSearch, key);
+  // Google seulement s'il reste de la part gratuite du jour ; sinon OpenStreetMap.
+  if (key && googleUsage().restant > 0) return searchGaragesGoogle(zone, withSearch, key);
   return searchGaragesOSM(zone, withSearch);
 }
 
@@ -2395,8 +2450,18 @@ async function handleApi(req, res, url) {
 
   // --- Suivi du coût Google (compteur de recherches, estimation en direct) ---
   if (p === '/api/google-usage' && method === 'GET') {
-    const PRIX = 0.032; // $ US par recherche (approx.)
-    return sendJSON(res, 200, { searches: googleSearchCount, estimatedUsd: +(googleSearchCount * PRIX).toFixed(2) });
+    const PRIX = 0.035; // $ US par requête au-delà de la part gratuite (Text Search Enterprise, approx.)
+    const g = googleUsage();
+    return sendJSON(res, 200, {
+      searches: googleSearchCount, // depuis le dernier démarrage
+      mois: g.u.mois,
+      ceMois: g.u.total,
+      aujourdhui: g.u.jourTotal,
+      plafondMensuel: g.plafondMensuel,
+      partJour: g.partJour,
+      restantAujourdhui: g.restant,
+      estimatedUsd: +(Math.max(0, g.u.total - 1000) * PRIX).toFixed(2), // 1 000 gratuites / mois
+    });
   }
   if (p === '/api/google-usage/reset' && method === 'POST') {
     googleSearchCount = 0;
@@ -2955,8 +3020,17 @@ async function autoTick() {
         if (r && !r.skipped) console.log(`  📧  [${camp.id}] Envoi :`, JSON.stringify(r));
       } catch (e) { console.log(`  ⚠️  [${camp.id}] Envoi échoué :`, e.message); }
     }
-    // Phase 2 — RATISSAGE (séquentiel, lent)
+    // Phase 2 — RATISSAGE (séquentiel, lent). Les campagnes les plus À SEC passent
+    // en premier : ce sont elles qui profitent de la part Google du jour.
+    const reserve = new Map();
     for (const camp of CAMPAIGNS) {
+      try {
+        const cs = await campaignCtx.run(camp.id, () => load('contacts'));
+        reserve.set(camp.id, cs.filter((c) => c.email && c.status === 'nouveau').length);
+      } catch { reserve.set(camp.id, 0); }
+    }
+    const parReserve = [...CAMPAIGNS].sort((a, b) => reserve.get(a.id) - reserve.get(b.id));
+    for (const camp of parReserve) {
       try {
         const r = await campaignCtx.run(camp.id, () => runHarvestOnce());
         if (r && !r.skipped) console.log(`  🔎  [${camp.id}] Ratissage :`, JSON.stringify(r));

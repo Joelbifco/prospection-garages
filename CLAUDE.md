@@ -52,6 +52,17 @@ phases, pour qu'aucune campagne ne se retrouve à 0 contact le matin.
   60/jour. Le total d'une boîte, toutes campagnes confondues, ne dépasse pas `PLAFOND_WARMUP`.
 - **Adresse refusée (5.1.x) = contact `invalide`** (`isRecipientRejected`), sans 2e essai,
   et ce refus **ne compte pas** comme échec de la boîte (sinon pause automatique à tort).
+- **Ratissage en tout temps** (`runHarvestOnce`) : il ne dépend plus de `auto.enabled`
+  (seul `auto.harvestOff` l'arrête). Les campagnes coupées le 11 sept. avaient cessé
+  de ratisser pendant un mois. Les campagnes les plus à sec ratissent en premier.
+- **Plafond Google DUR** (`googleReserver`, fichier `google-usage.json`) : le masque de
+  champs (site + téléphone) est facturé en « Text Search Enterprise », ~1 000 gratuites
+  par mois. Plafond mensuel `GOOGLE_PLAFOND_MENSUEL` (défaut 1 000) étalé en parts
+  quotidiennes ; au-delà, repli automatique sur OpenStreetMap. Recherches par niche :
+  `NICHE_QUERIES` (3 par niche, chaque recherche × chaque point = 1 requête facturée).
+- **OpenStreetMap est maigre** : ~2 entreprises de construction avec site à Sherbrooke,
+  25 à Laval. Les miroirs Overpass sont instables (504/429/500) : `runOverpass` fait
+  2 tours et rejette les réponses tronquées (`remark` « runtime error »).
 - **Identifiants IMAP distincts** (`settings.imap.user/pass`, repli sur le SMTP si vides).
   Indispensable dès que l'envoi passe par un relais (Brevo, boîtes dédiées) : sinon la
   lecture des réponses tente de se connecter à Hostinger avec l'identifiant du relais.
