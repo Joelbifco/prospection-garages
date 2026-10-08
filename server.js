@@ -901,6 +901,84 @@ async function envoyesAujParBoite(boite, sauf) {
   return n;
 }
 
+// ---------------------------------------------------------------------------
+//  MONTÉE PROGRESSIVE PAR BOÎTE (oct. 2026). Une fois réchauffée (14 jours), une
+//  boîte part de 30/jour et gagne +5 par semaine jusqu'à 50, SEULEMENT si elle
+//  est saine sur les 7 derniers jours :
+//    - au moins 50 envois réussis (assez de recul pour juger),
+//    - moins de 2 % de rebonds (rebonds IMAP + adresses refusées 5.1.x),
+//    - aucune erreur SMTP fatale (compte bloqué, identifiants refusés…).
+//  Au-delà de 3 % de rebonds, la boîte REDESCEND à 30 et une alerte part.
+//  Paliers dans boites.json (survit aux redémarrages), évalués une fois par jour.
+// ---------------------------------------------------------------------------
+const PALIER_MIN = PLAFOND_WARMUP; // 30
+const PALIER_MAX = 50;
+const PALIER_PAS = 5;
+const PALIER_JOURS = 7;
+const BOITES_FILE = path.join(DATA_DIR, 'boites.json');
+function lireBoites() {
+  try { return JSON.parse(readFileSync(BOITES_FILE, 'utf8')); } catch { return {}; }
+}
+function palierBoite(boite) {
+  const b = lireBoites()[String(boite || '').trim().toLowerCase()];
+  const p = Number(b && b.palier) || PALIER_MIN;
+  return Math.max(PALIER_MIN, Math.min(PALIER_MAX, p));
+}
+// Santé d'une boîte sur 7 jours, toutes campagnes qui l'utilisent confondues.
+async function santeBoite(boite) {
+  const depuis = Date.now() - 7 * 86400000;
+  let ok = 0, rebonds = 0, fatales = 0;
+  for (const c of CAMPAIGNS) {
+    const s = await campaignCtx.run(c.id, () => load('settings'));
+    if (String(s.smtp?.user || '').trim().toLowerCase() !== boite) continue;
+    const sends = await campaignCtx.run(c.id, () => load('sends'));
+    for (const x of sends) {
+      if (new Date(x.at).getTime() < depuis) continue;
+      if (x.status === 'ok') ok++;
+      else if (isFatalSmtpError(x.error)) fatales++;
+      else if (DESTINATAIRE_REFUSE_RE.test(String(x.error || ''))) rebonds++;
+    }
+    const bounces = await campaignCtx.run(c.id, () => load('bounces'));
+    rebonds += bounces.filter((b) => new Date(b.date).getTime() >= depuis).length;
+  }
+  return { ok, rebonds, fatales, taux: ok ? rebonds / ok : 0 };
+}
+let derniereEvalPaliers = '';
+async function evaluerPaliers() {
+  if (derniereEvalPaliers === todayStr()) return;
+  derniereEvalPaliers = todayStr();
+  const etat = lireBoites();
+  const boites = new Map(); // boîte → campagnes
+  for (const c of CAMPAIGNS) {
+    const s = await campaignCtx.run(c.id, () => load('settings'));
+    const b = String(s.smtp?.user || '').trim().toLowerCase();
+    if (b) boites.set(b, [...(boites.get(b) || []), c]);
+  }
+  for (const [b, camps] of boites) {
+    const e = etat[b] || (etat[b] = { palier: PALIER_MIN, depuis: todayStr() });
+    const sante = await santeBoite(b);
+    e.sante = { ...sante, taux: +(sante.taux * 100).toFixed(1), le: todayStr() };
+    const jours = Math.round((startOfTodayMs() - new Date(e.depuis + 'T00:00:00').getTime()) / 86400000);
+    if (sante.ok >= 30 && sante.taux > 0.03 && e.palier > PALIER_MIN) {
+      const avant = e.palier;
+      e.palier = PALIER_MIN;
+      e.depuis = todayStr();
+      console.log(`  ⬇️  Boîte ${b} redescendue à ${PALIER_MIN}/jour (${e.sante.taux} % de rebonds)`);
+      try {
+        await notifyCampaignProblem(camps[0], `La boîte ${b} redescend de ${avant} à ${PALIER_MIN} courriels/jour : ${e.sante.taux} % de rebonds sur 7 jours (seuil 3 %).`);
+      } catch { /* alerte impossible : le palier est quand même abaissé */ }
+    } else if (
+      jours >= PALIER_JOURS && e.palier < PALIER_MAX &&
+      sante.ok >= 50 && sante.taux < 0.02 && sante.fatales === 0
+    ) {
+      e.palier = Math.min(PALIER_MAX, e.palier + PALIER_PAS);
+      e.depuis = todayStr();
+      console.log(`  ⬆️  Boîte ${b} montée à ${e.palier}/jour (${sante.ok} envois, ${e.sante.taux} % de rebonds sur 7 j)`);
+    }
+  }
+  try { writeFileSync(BOITES_FILE, JSON.stringify(etat, null, 2)); } catch { /* on réessaiera demain */ }
+}
+
 function warmupInfo(settings, sends) {
   const w = settings.warmup || {};
   const usedToday = countSentToday(sends);
@@ -910,8 +988,10 @@ function warmupInfo(settings, sends) {
   const start = w.startDate ? new Date(w.startDate + 'T00:00:00') : new Date();
   const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
   const day = Math.max(0, Math.round((startOfTodayMs() - startDay) / 86400000));
-  const cap = Math.min(rampCap(day), Number(w.maxPerDay) || PLAFOND_WARMUP, PLAFOND_WARMUP);
-  return { enabled: true, cap, usedToday, remaining: Math.max(0, cap - usedToday), day, plafond: PLAFOND_WARMUP };
+  // Réchauffement (14 premiers jours) : rampe 10 → 20 → 30. Ensuite : palier de la boîte.
+  const palier = palierBoite(settings.smtp?.user);
+  const cap = Math.min(day < 14 ? rampCap(day) : palier, Number(w.maxPerDay) || PALIER_MAX, PALIER_MAX);
+  return { enabled: true, cap, usedToday, remaining: Math.max(0, cap - usedToday), day, plafond: palier };
 }
 
 // ---------------------------------------------------------------------------
@@ -1420,7 +1500,7 @@ async function runSendOnce(force = false) {
   const boite = String(settings.smtp?.user || '').trim().toLowerCase();
   if (boite) {
     const parAutres = await envoyesAujParBoite(boite, currentCampaign());
-    remaining = Math.min(remaining, Math.max(0, PLAFOND_WARMUP - parAutres - countSentToday(sends)));
+    remaining = Math.min(remaining, Math.max(0, palierBoite(boite) - parAutres - countSentToday(sends)));
   }
 
   const isNew = (c) => c.email && c.status === 'nouveau';
@@ -2481,6 +2561,10 @@ async function handleApi(req, res, url) {
       estimatedUsd: +(Math.max(0, g.u.total - 1000) * PRIX).toFixed(2), // 1 000 gratuites / mois
     });
   }
+  // Paliers d'envoi par boîte (montée progressive 30 → 50) et santé sur 7 jours.
+  if (p === '/api/boites' && method === 'GET') {
+    return sendJSON(res, 200, { min: PALIER_MIN, max: PALIER_MAX, pas: PALIER_PAS, joursEntrePaliers: PALIER_JOURS, boites: lireBoites() });
+  }
   // Régler le budget Google sans redémarrer : { plafondMensuel, joursRemplissage }
   if (p === '/api/google-usage/plafond' && method === 'POST') {
     const body = await readBody(req);
@@ -3043,6 +3127,8 @@ async function autoTick() {
   tickBusy = true;
   tickSince = Date.now();
   try {
+    // Paliers des boîtes (une fois par jour, AVANT l'envoi pour qu'il en profite).
+    try { await evaluerPaliers(); } catch (e) { console.log('  ⚠️  Évaluation des paliers échouée :', e.message); }
     // Phase 1 — ENVOI (séquentiel, rapide)
     for (const camp of CAMPAIGNS) {
       try {

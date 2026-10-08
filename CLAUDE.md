@@ -50,6 +50,11 @@ phases, pour qu'aucune campagne ne se retrouve à 0 contact le matin.
 - **Plafond par BOÎTE, pas seulement par campagne** (`envoyesAujParBoite`). Plusieurs
   campagnes partagent une même boîte d'envoi : sans ce calcul, une boîte envoyait
   60/jour. Le total d'une boîte, toutes campagnes confondues, ne dépasse pas `PLAFOND_WARMUP`.
+- **Montée progressive PAR BOÎTE** (`evaluerPaliers`, `palierBoite`, fichier `boites.json`,
+  `GET /api/boites`) : après les 14 jours de réchauffement, une boîte part de 30/jour et gagne
+  +5 par semaine jusqu'à 50, seulement si elle est saine sur 7 jours (≥ 50 envois, < 2 % de
+  rebonds IMAP + refus 5.1.x, aucune erreur fatale). > 3 % de rebonds → retour à 30 + alerte.
+  Le plafond par boîte partagée utilise aussi ce palier.
 - **Adresse refusée (5.1.x) = contact `invalide`** (`isRecipientRejected`), sans 2e essai,
   et ce refus **ne compte pas** comme échec de la boîte (sinon pause automatique à tort).
 - **Ratissage en tout temps** (`runHarvestOnce`) : il ne dépend plus de `auto.enabled`
