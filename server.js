@@ -2435,16 +2435,19 @@ function resultatsConfig() {
 }
 const extraireCourriels = (t) =>
   [...new Set((String(t || '').toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g) || []))];
+// Montant lu dans du texte libre (« 2000$ cash », « 2500 plus livraison »,
+// « 2,450.00 », « 1 250 $ ») : on garde le PREMIER montant. Au-delà de 100 000 $,
+// c'est une erreur de lecture (plusieurs nombres collés) : 0.
 const montantNombre = (v) => {
-  if (typeof v === 'number') return v;
-  let s = String(v || '').replace(/[^\d,.-]/g, '');
-  // « 2,450.00 » (anglais) → virgule = milliers ; « 2 450,00 » (français) → virgule = décimales
-  // « 3,000 » (virgule + exactement 3 chiffres) → milliers aussi.
-  if (s.includes('.') && s.includes(',')) s = s.replace(/,/g, '');
-  else if (/,\d{3}$/.test(s)) s = s.replace(/,/g, '');
-  else s = s.replace(',', '.');
+  if (typeof v === 'number') return v > 0 && v < 100000 ? v : 0;
+  const m = String(v || '').match(/\d{1,3}(?:[  ,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?/);
+  if (!m) return 0;
+  let s = m[0].replace(/[  ]/g, '');
+  // « 2,450.00 » / « 3,000 » : virgule = milliers ; « 975,50 » : virgule = décimales
+  if (/,\d{3}(\D|$)/.test(s)) s = s.replace(/,(?=\d{3}(\D|$))/g, '');
+  s = s.replace(',', '.');
   const n = parseFloat(s);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) && n > 0 && n < 100000 ? n : 0;
 };
 const venteAnnulee = (v) => /annul|cancel|rembours/i.test(String(v.statut || ''));
 
@@ -2555,6 +2558,9 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const lignes = Array.isArray(body.ventes) ? body.ventes.slice(0, 5000) : [];
     const store = lireJson(VENTES_FILE, { ventes: [] });
+    // Le script envoie un instantané complet (400 jours) : on REMPLACE les ventes
+    // du tableur au lieu d'empiler (sinon une correction créerait des doublons).
+    if (body.remplacer) store.ventes = store.ventes.filter((v) => v.source !== 'tableur');
     const cle = (v) => (v.facture ? 'f:' + v.facture : 'd:' + v.date + '|' + v.montant + '|' + (v.courriels || []).join(','));
     const parCle = new Map(store.ventes.filter((v) => v.source !== 'manuel').map((v) => [cle(v), v]));
     let ajoutees = 0, maj = 0;

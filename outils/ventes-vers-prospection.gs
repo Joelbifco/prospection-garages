@@ -19,6 +19,9 @@
  * ===========================================================================
  */
 const URL_APP = 'http://137.184.167.254:3000/api/ventes/import';
+// Tableur « Bifco » : ouvert par son identifiant, le script fonctionne donc aussi
+// bien attaché au tableur (Extensions > Apps Script) qu'en projet indépendant.
+const ID_TABLEUR = '1yIjFddmma16SRt4cRvDZRw1Sgrt3slkaLXJ_HVAZ6vs';
 const ONGLET = 'Ventes Internes';
 const JOURS = 400;
 
@@ -33,26 +36,35 @@ function installer() {
 function envoyerVentes() {
   const jeton = PropertiesService.getScriptProperties().getProperty('JETON_PROSPECTION');
   if (!jeton) throw new Error('Propriété JETON_PROSPECTION manquante (voir les instructions en haut du fichier).');
-  const feuille = SpreadsheetApp.getActive().getSheetByName(ONGLET);
+  const feuille = SpreadsheetApp.openById(ID_TABLEUR).getSheetByName(ONGLET);
   if (!feuille) throw new Error('Onglet « ' + ONGLET + ' » introuvable.');
   const valeurs = feuille.getDataRange().getValues();
-  const titres = valeurs[0].map((t) => String(t).toLowerCase());
-  const col = (debut) => titres.findIndex((t) => t.indexOf(debut) === 0);
+  // Titres comparés sans accents, sans majuscules ni retours à la ligne.
+  const norm = (s) => String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+  // La ligne de titres n'est pas forcément la 1re : on cherche celle qui contient « Prix de vente ».
+  let h = -1;
+  for (let r = 0; r < Math.min(10, valeurs.length); r++) {
+    if (valeurs[r].some((t) => norm(t).indexOf('prix de vente') >= 0)) { h = r; break; }
+  }
+  if (h < 0) throw new Error('Ligne de titres introuvable : aucune colonne « Prix de vente » dans les 10 premières lignes.');
+  const titres = valeurs[h].map(norm);
+  const col = (mot) => titres.findIndex((t) => t.indexOf(mot) >= 0);
   const C = {
-    date: col('date'),
-    facture: col('numero de facture'),
+    date: titres.findIndex((t) => t.indexOf('date') === 0),
+    facture: col('facture'),
     montant: col('prix de vente'),
-    cout: col('prix payé'),
-    client: col('nom, numéro, courriel'),
-    source: col('sources de vente'),
-    statut: col('statuts de suivi'),
+    cout: col('prix paye'),
+    client: col('courriel'),
+    source: col('source'),
+    statut: col('statut'),
   };
   if (C.date < 0 || C.montant < 0 || C.client < 0) {
-    throw new Error('Colonnes introuvables : vérifier les titres DATE / Prix de vente / Nom, Numéro, Courriel.');
+    throw new Error('Colonnes introuvables (date ' + C.date + ', prix ' + C.montant + ', courriel ' + C.client +
+      '). Titres lus en ligne ' + (h + 1) + ' : ' + titres.filter(String).join(' | '));
   }
   const limite = Date.now() - JOURS * 86400000;
   const ventes = [];
-  for (let i = 1; i < valeurs.length; i++) {
+  for (let i = h + 1; i < valeurs.length; i++) {
     const l = valeurs[i];
     const date = lireDate(l[C.date]);
     if (!date || date.getTime() < limite) continue;
@@ -60,8 +72,8 @@ function envoyerVentes() {
     ventes.push({
       facture: C.facture >= 0 ? String(l[C.facture] || '') : '',
       date: date.toISOString(),
-      montant: l[C.montant],
-      cout: C.cout >= 0 ? l[C.cout] : '',
+      montant: premierMontant(l[C.montant]),
+      cout: C.cout >= 0 ? premierMontant(l[C.cout]) : 0,
       courriels: courriels,
       sourceVente: C.source >= 0 ? String(l[C.source] || '') : '',
       statut: C.statut >= 0 ? String(l[C.statut] || '') : '',
@@ -71,11 +83,23 @@ function envoyerVentes() {
     method: 'post',
     contentType: 'application/json',
     headers: { 'X-Ventes-Jeton': jeton },
-    payload: JSON.stringify({ ventes: ventes }),
+    // remplacer : l'app remplace toutes les ventes du tableur par cet instantané.
+    payload: JSON.stringify({ ventes: ventes, remplacer: true }),
     muteHttpExceptions: true,
   });
   Logger.log('Réponse de l\'application (' + rep.getResponseCode() + ') : ' + rep.getContentText());
   if (rep.getResponseCode() !== 200) throw new Error('Envoi refusé : ' + rep.getContentText());
+}
+
+// Les montants sont souvent écrits en texte libre (« 2000$ cash », « 2500 plus
+// livraison », « 2800$ x5 ») : on garde le PREMIER montant de la case.
+// Au-delà de 100 000 $, c'est une erreur de lecture : ignoré (0).
+function premierMontant(v) {
+  if (typeof v === 'number') return v > 0 && v < 100000 ? v : 0;
+  const m = String(v || '').match(/\d{1,3}(?:[ \u00a0]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?/);
+  if (!m) return 0;
+  const n = parseFloat(m[0].replace(/[ \u00a0]/g, '').replace(',', '.'));
+  return n > 0 && n < 100000 ? n : 0;
 }
 
 // Accepte une vraie date, « 2026/10/08 », « 2026-10-08 » ou « 08/10/2026 ».
