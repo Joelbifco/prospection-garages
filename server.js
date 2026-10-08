@@ -7,7 +7,7 @@
 
 import http from 'node:http';
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, copyFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
@@ -2398,6 +2398,121 @@ async function checkCampaignHealthAndAlert() {
 // ---------------------------------------------------------------------------
 //  Routes API
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+//  RÉSULTATS : de l'envoi jusqu'à la vente (oct. 2026)
+//  - ventes.json (global) : ventes importées du tableur « Ventes Internes »
+//    (script Google outils/ventes-vers-prospection.gs) + ventes saisies à la main.
+//  - Attribution automatique : même courriel, sinon même domaine d'entreprise
+//    (hors Gmail/Hotmail…), avec un courriel de prospection envoyé AVANT la vente.
+//  - Sur chaque contact : c.interesse / c.soumission (dates ISO), marqués à la main.
+//  - resultats-config.json : jeton du script + coûts mensuels (pour le rendement).
+// ---------------------------------------------------------------------------
+const VENTES_FILE = path.join(DATA_DIR, 'ventes.json');
+const RESULTATS_CONFIG_FILE = path.join(DATA_DIR, 'resultats-config.json');
+const COURRIELS_GRAND_PUBLIC = new Set([
+  'gmail.com', 'gmail.ca', 'hotmail.com', 'hotmail.ca', 'hotmail.fr', 'outlook.com', 'outlook.fr',
+  'live.com', 'live.ca', 'msn.com', 'yahoo.com', 'yahoo.ca', 'yahoo.fr', 'ymail.com', 'icloud.com',
+  'me.com', 'aol.com', 'videotron.ca', 'videotron.net', 'bell.net', 'sympatico.ca', 'cgocable.ca',
+  'cogeco.ca', 'globetrotter.net', 'telus.net', 'shaw.ca', 'rogers.com', 'protonmail.com', 'proton.me',
+]);
+function lireJson(f, defaut) {
+  try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return defaut; }
+}
+function ecrireJson(f, v) {
+  const tmp = f + '.tmp';
+  writeFileSync(tmp, JSON.stringify(v, null, 2));
+  renameSync(tmp, f); // atomique : jamais de fichier à demi écrit
+}
+function resultatsConfig() {
+  const c = lireJson(RESULTATS_CONFIG_FILE, {});
+  let change = false;
+  if (!c.jeton) { c.jeton = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, ''); change = true; }
+  if (c.mailforgeMensuel == null) { c.mailforgeMensuel = 45; change = true; } // 15 boîtes × 3 $
+  if (c.serveurMensuel == null) { c.serveurMensuel = 12; change = true; }
+  if (c.autresMensuel == null) { c.autresMensuel = 0; change = true; }
+  if (change) ecrireJson(RESULTATS_CONFIG_FILE, c);
+  return c;
+}
+const extraireCourriels = (t) =>
+  [...new Set((String(t || '').toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g) || []))];
+const montantNombre = (v) => {
+  if (typeof v === 'number') return v;
+  let s = String(v || '').replace(/[^\d,.-]/g, '');
+  // « 2,450.00 » (anglais) → virgule = milliers ; « 2 450,00 » (français) → virgule = décimales
+  // « 3,000 » (virgule + exactement 3 chiffres) → milliers aussi.
+  if (s.includes('.') && s.includes(',')) s = s.replace(/,/g, '');
+  else if (/,\d{3}$/.test(s)) s = s.replace(/,/g, '');
+  else s = s.replace(',', '.');
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
+};
+const venteAnnulee = (v) => /annul|cancel|rembours/i.test(String(v.statut || ''));
+
+// Index de tous les contacts prospectés (13 campagnes) : par courriel et par domaine.
+async function indexProspects() {
+  const parCourriel = new Map();
+  const parDomaine = new Map();
+  for (const camp of CAMPAIGNS) {
+    await campaignCtx.run(camp.id, async () => {
+      const [contacts, sends] = await Promise.all([load('contacts'), load('sends')]);
+      const envoisPar = new Map();
+      for (const s of sends) {
+        if (s.status !== 'ok' || !s.contactId || s.isReply) continue;
+        if (!envoisPar.has(s.contactId)) envoisPar.set(s.contactId, []);
+        envoisPar.get(s.contactId).push({ at: s.at, templateId: s.templateId });
+      }
+      for (const c of contacts) {
+        const envois = (envoisPar.get(c.id) || []).sort((a, b) => new Date(a.at) - new Date(b.at));
+        if (!envois.length || !c.email) continue;
+        const p = { campagne: camp.id, contactId: c.id, nom: c.name || '', email: c.email, envois };
+        const e = c.email.toLowerCase();
+        parCourriel.set(e, [...(parCourriel.get(e) || []), p]);
+        const d = e.split('@')[1];
+        if (d && !COURRIELS_GRAND_PUBLIC.has(d)) parDomaine.set(d, [...(parDomaine.get(d) || []), p]);
+      }
+    });
+  }
+  return { parCourriel, parDomaine };
+}
+// Attribue une vente à la prospection (ou null). Dernier courriel reçu AVANT la vente.
+function attribuerVente(v, idx) {
+  const quand = new Date(v.date || 0).getTime();
+  const essayer = (cands, methode) => {
+    let best = null;
+    for (const p of cands || []) {
+      const avant = p.envois.filter((e) => new Date(e.at).getTime() <= quand);
+      if (!avant.length) continue;
+      const dernier = avant[avant.length - 1];
+      if (!best || new Date(dernier.at) > new Date(best.dernierEnvoi)) {
+        best = {
+          methode, campagne: p.campagne, contactId: p.contactId, nom: p.nom, email: p.email,
+          premierEnvoi: avant[0].at, dernierEnvoi: dernier.at, modeleId: avant[0].templateId,
+        };
+      }
+    }
+    return best;
+  };
+  for (const e of v.courriels || []) {
+    const a = essayer(idx.parCourriel.get(e), 'même courriel');
+    if (a) return a;
+  }
+  for (const e of v.courriels || []) {
+    const d = e.split('@')[1];
+    if (!d || COURRIELS_GRAND_PUBLIC.has(d)) continue;
+    const a = essayer(idx.parDomaine.get(d), 'même entreprise (domaine)');
+    if (a) return a;
+  }
+  if (/prospection/i.test(String(v.sourceVente || ''))) return { methode: 'source déclarée « prospection »' };
+  return null;
+}
+async function reattribuerVentes() {
+  const store = lireJson(VENTES_FILE, { ventes: [] });
+  const idx = await indexProspects();
+  for (const v of store.ventes) if (v.source !== 'manuel') v.attribution = attribuerVente(v, idx);
+  ecrireJson(VENTES_FILE, store);
+  return store;
+}
+
 async function handleApi(req, res, url) {
   const p = url.pathname;
   const method = req.method;
@@ -2427,6 +2542,46 @@ async function handleApi(req, res, url) {
     res.setHeader('Set-Cookie', 'pg_auth=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
     return sendJSON(res, 200, { ok: true });
   }
+  // --- Réception des ventes du tableur (script Google) : jeton au lieu du cookie ---
+  // Le script n'envoie que : facture, date, montant, coût, courriels du client,
+  // source et statut. Jamais de nom, de téléphone ni d'adresse.
+  if (p === '/api/ventes/import' && method === 'POST') {
+    const conf = resultatsConfig();
+    const recu = Buffer.from(String(req.headers['x-ventes-jeton'] || ''));
+    const attendu = Buffer.from(conf.jeton);
+    if (recu.length !== attendu.length || !timingSafeEqual(recu, attendu)) {
+      return sendJSON(res, 401, { error: 'Jeton invalide' });
+    }
+    const body = await readBody(req);
+    const lignes = Array.isArray(body.ventes) ? body.ventes.slice(0, 5000) : [];
+    const store = lireJson(VENTES_FILE, { ventes: [] });
+    const cle = (v) => (v.facture ? 'f:' + v.facture : 'd:' + v.date + '|' + v.montant + '|' + (v.courriels || []).join(','));
+    const parCle = new Map(store.ventes.filter((v) => v.source !== 'manuel').map((v) => [cle(v), v]));
+    let ajoutees = 0, maj = 0;
+    for (const l of lignes) {
+      const v = {
+        source: 'tableur',
+        facture: String(l.facture || '').trim().slice(0, 40),
+        date: l.date ? new Date(l.date).toISOString() : null,
+        montant: montantNombre(l.montant),
+        cout: montantNombre(l.cout),
+        courriels: extraireCourriels((l.courriels || []).join(' ')),
+        sourceVente: String(l.sourceVente || '').slice(0, 60),
+        statut: String(l.statut || '').slice(0, 60),
+      };
+      if (!v.date || !v.montant) continue;
+      const k = cle(v);
+      const ex = parCle.get(k);
+      if (ex) { Object.assign(ex, v); maj++; }
+      else { v.id = randomUUID(); store.ventes.push(v); parCle.set(k, v); ajoutees++; }
+    }
+    store.derniereImport = { at: new Date().toISOString(), recues: lignes.length, ajoutees, maj };
+    ecrireJson(VENTES_FILE, store);
+    const apres = await reattribuerVentes();
+    const attribuees = apres.ventes.filter((v) => v.attribution && !venteAnnulee(v)).length;
+    return sendJSON(res, 200, { ok: true, recues: lignes.length, ajoutees, maj, attribuees });
+  }
+
   // Toutes les autres routes API exigent d'être connecté (si l'auth est activée)
   if (AUTH_ENABLED && !isAuthed(req)) {
     return sendJSON(res, 401, { error: 'Non authentifié' });
@@ -2561,6 +2716,142 @@ async function handleApi(req, res, url) {
       estimatedUsd: +(Math.max(0, g.u.total - 1000) * PRIX).toFixed(2), // 1 000 gratuites / mois
     });
   }
+  // --- RÉSULTATS : marquer un contact (intéressé / soumission / vendu) ---
+  // { contactId, etape: 'interesse'|'soumission'|'vente', montant?, cout?, note?, annuler? }
+  if (p === '/api/resultats/marquer' && method === 'POST') {
+    const body = await readBody(req);
+    const contacts = await load('contacts');
+    const c = contacts.find((x) => x.id === body.contactId);
+    if (!c) return sendJSON(res, 404, { error: 'Contact introuvable' });
+    if (body.etape === 'interesse' || body.etape === 'soumission') {
+      if (body.annuler) delete c[body.etape];
+      else c[body.etape] = new Date().toISOString();
+      await save('contacts', contacts);
+      return sendJSON(res, 200, { ok: true });
+    }
+    if (body.etape === 'vente') {
+      const store = lireJson(VENTES_FILE, { ventes: [] });
+      if (body.annuler) {
+        store.ventes = store.ventes.filter((v) => !(v.source === 'manuel' && v.id === body.venteId));
+      } else {
+        const montant = montantNombre(body.montant);
+        if (!montant) return sendJSON(res, 400, { error: 'Montant requis' });
+        const sends = await load('sends');
+        const envois = sends.filter((s) => s.status === 'ok' && s.contactId === c.id && !s.isReply)
+          .sort((a, b) => new Date(a.at) - new Date(b.at));
+        store.ventes.push({
+          id: randomUUID(), source: 'manuel', date: new Date().toISOString(),
+          montant, cout: montantNombre(body.cout), note: String(body.note || '').slice(0, 200),
+          courriels: c.email ? [c.email] : [],
+          attribution: {
+            methode: 'saisie manuelle', campagne: currentCampaign(), contactId: c.id, nom: c.name || '',
+            email: c.email, premierEnvoi: envois[0]?.at || null,
+            dernierEnvoi: envois[envois.length - 1]?.at || null, modeleId: envois[0]?.templateId || null,
+          },
+        });
+        c.soumission = c.soumission || new Date().toISOString();
+        c.interesse = c.interesse || new Date().toISOString();
+        await save('contacts', contacts);
+      }
+      ecrireJson(VENTES_FILE, store);
+      return sendJSON(res, 200, { ok: true });
+    }
+    return sendJSON(res, 400, { error: 'Étape inconnue' });
+  }
+
+  // --- RÉSULTATS : tableau de bord complet (13 campagnes) ---
+  // ?jours=30 (0 = depuis le début)
+  if (p === '/api/resultats' && method === 'GET') {
+    const jours = Math.max(0, Number(url.searchParams.get('jours') ?? 30) || 0);
+    const depuis = jours ? Date.now() - jours * 86400000 : 0;
+    const dans = (d) => d && new Date(d).getTime() >= depuis;
+    const conf = resultatsConfig();
+    const store = lireJson(VENTES_FILE, { ventes: [] });
+    const ventesOk = store.ventes.filter((v) => v.attribution && v.attribution.campagne && !venteAnnulee(v) && dans(v.date));
+    const parModele = new Map(); // nom du modèle → compteurs
+    const mod = (nom) => {
+      if (!parModele.has(nom)) parModele.set(nom, { modele: nom, envois: 0, joints: 0, reponses: 0, ventes: 0, ca: 0 });
+      return parModele.get(nom);
+    };
+    const campagnes = [];
+    let premierEnvoiGlobal = Infinity;
+    for (const camp of CAMPAIGNS) {
+      const r = await campaignCtx.run(camp.id, async () => {
+        const [contacts, sends, replies, templates] = await Promise.all([
+          load('contacts'), load('sends'), load('replies'), load('templates'),
+        ]);
+        const nomModele = new Map(templates.map((t) => [t.id, t.name]));
+        const premierModele = new Map(); // contact → 1er modèle reçu
+        const joints = new Set();
+        let envois = 0;
+        for (const s of sends.slice().sort((a, b) => new Date(a.at) - new Date(b.at))) {
+          if (s.status !== 'ok' || s.isReply || !s.contactId) continue;
+          premierEnvoiGlobal = Math.min(premierEnvoiGlobal, new Date(s.at).getTime());
+          if (!premierModele.has(s.contactId)) premierModele.set(s.contactId, nomModele.get(s.templateId) || 'Modèle supprimé');
+          if (!dans(s.at)) continue;
+          envois++;
+          joints.add(s.contactId);
+          mod(nomModele.get(s.templateId) || 'Modèle supprimé').envois++;
+        }
+        for (const cid of joints) mod(premierModele.get(cid) || 'Modèle supprimé').joints++;
+        const repondants = new Set(replies.filter((x) => !x.auto && x.contactId && dans(x.date)).map((x) => x.contactId));
+        for (const cid of repondants) mod(premierModele.get(cid) || 'Modèle supprimé').reponses++;
+        const v = ventesOk.filter((x) => x.attribution.campagne === camp.id);
+        for (const x of v) {
+          const m = mod(premierModele.get(x.attribution.contactId) || nomModele.get(x.attribution.modeleId) || 'Modèle supprimé');
+          m.ventes++;
+          m.ca += x.montant;
+        }
+        const ca = v.reduce((t, x) => t + x.montant, 0);
+        const marge = v.reduce((t, x) => t + (x.cout ? x.montant - x.cout : 0), 0);
+        return {
+          id: camp.id, nom: camp.name, envois, joints: joints.size, reponses: repondants.size,
+          interesses: contacts.filter((c) => dans(c.interesse)).length,
+          soumissions: contacts.filter((c) => dans(c.soumission)).length,
+          ventes: v.length, ca: Math.round(ca), marge: Math.round(marge),
+        };
+      });
+      campagnes.push(r);
+    }
+    const tot = campagnes.reduce((t, c) => {
+      for (const k of ['envois', 'joints', 'reponses', 'interesses', 'soumissions', 'ventes', 'ca', 'marge']) t[k] = (t[k] || 0) + c[k];
+      return t;
+    }, {});
+    // Coûts : abonnements mensuels × durée de la période + Google du mois en cours.
+    const g = googleUsage();
+    const googleMois = Math.max(0, g.u.total - 1000) * 0.035;
+    const moisPeriode = jours ? jours / 30 : Math.max(1, (Date.now() - premierEnvoiGlobal) / (30 * 86400000));
+    const fixe = (Number(conf.mailforgeMensuel) || 0) + (Number(conf.serveurMensuel) || 0) + (Number(conf.autresMensuel) || 0);
+    const cout = Math.round(fixe * moisPeriode + googleMois);
+    const nonAttribuees = store.ventes.filter((v) => v.source !== 'manuel' && !v.attribution && dans(v.date)).length;
+    return sendJSON(res, 200, {
+      jours, campagnes, total: tot,
+      couts: { mensuelFixe: fixe, googleMois: Math.round(googleMois), periode: cout, config: { mailforgeMensuel: conf.mailforgeMensuel, serveurMensuel: conf.serveurMensuel, autresMensuel: conf.autresMensuel } },
+      rendement: cout ? +((tot.marge || tot.ca) / cout).toFixed(2) : null,
+      modeles: [...parModele.values()].filter((m) => m.envois || m.ventes).sort((a, b) => b.envois - a.envois),
+      ventes: ventesOk.sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 200).map((v) => ({
+        id: v.id, date: v.date, montant: v.montant, cout: v.cout || 0, facture: v.facture || '', source: v.source,
+        sourceVente: v.sourceVente || '', note: v.note || '', methode: v.attribution.methode,
+        campagne: (CAMPAIGNS.find((c) => c.id === v.attribution.campagne) || {}).name || '',
+        nom: v.attribution.nom || '', premierEnvoi: v.attribution.premierEnvoi,
+      })),
+      importTableur: { ...(store.derniereImport || {}), nonAttribuees, totalImportees: store.ventes.filter((v) => v.source === 'tableur').length },
+    });
+  }
+  // Coûts mensuels (pour le rendement) + jeton du script tableur
+  if (p === '/api/resultats/config' && method === 'GET') {
+    return sendJSON(res, 200, resultatsConfig());
+  }
+  if (p === '/api/resultats/config' && method === 'POST') {
+    const body = await readBody(req);
+    const c = resultatsConfig();
+    for (const k of ['mailforgeMensuel', 'serveurMensuel', 'autresMensuel']) {
+      if (body[k] != null) c[k] = Math.max(0, Number(body[k]) || 0);
+    }
+    ecrireJson(RESULTATS_CONFIG_FILE, c);
+    return sendJSON(res, 200, { ok: true });
+  }
+
   // Paliers d'envoi par boîte (montée progressive 30 → 50) et santé sur 7 jours.
   if (p === '/api/boites' && method === 'GET') {
     return sendJSON(res, 200, { min: PALIER_MIN, max: PALIER_MAX, pas: PALIER_PAS, joursEntrePaliers: PALIER_JOURS, boites: lireBoites() });
@@ -2955,9 +3246,16 @@ async function handleApi(req, res, url) {
     }
   }
   if (p === '/api/replies' && method === 'GET') {
-    const [replies, sends] = await Promise.all([load('replies'), load('sends')]);
+    const [replies, sends, contacts] = await Promise.all([load('replies'), load('sends'), load('contacts')]);
     // Réponses que TU as envoyées depuis l'app (bouton « Répondre »).
     const mesReponses = sends.filter((s) => s.isReply && s.status === 'ok' && s.contactId);
+    const parId = new Map(contacts.map((c) => [c.id, c]));
+    const ventesPar = new Map();
+    for (const v of lireJson(VENTES_FILE, { ventes: [] }).ventes) {
+      const a = v.attribution;
+      if (!a || a.campagne !== currentCampaign() || !a.contactId || venteAnnulee(v)) continue;
+      ventesPar.set(a.contactId, [...(ventesPar.get(a.contactId) || []), { id: v.id, montant: v.montant, source: v.source, date: v.date }]);
+    }
     const sorted = replies
       .slice()
       .map((r) => {
@@ -2965,7 +3263,8 @@ async function handleApi(req, res, url) {
         const repondu = mesReponses.some(
           (s) => s.contactId === r.contactId && new Date(s.at) >= new Date(r.date)
         );
-        return { ...r, repondu };
+        const c = parId.get(r.contactId) || {};
+        return { ...r, repondu, interesse: c.interesse || null, soumission: c.soumission || null, ventes: ventesPar.get(r.contactId) || [] };
       })
       .sort((a, b) => new Date(b.date) - new Date(a.date));
     return sendJSON(res, 200, sorted);

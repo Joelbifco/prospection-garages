@@ -80,6 +80,19 @@ une boîte `moteurs@<domaine>` par domaine ; les DNS des domaines de prospection
 qu'à `bifcoshop.com` (boîtes de gestion). Le défaut du code reste Hostinger
 (`smtp.hostinger.com:465`) : à corriger dans Réglages pour toute nouvelle campagne.
 
+## Résultats : de l'envoi à la vente
+- Onglet **💰 Résultats** (`GET /api/resultats?jours=N`) : envois → réponses → intéressés →
+  soumissions → ventes → CA / marge, par campagne et par modèle (premier courriel reçu),
+  plus le coût (`resultats-config.json` : Mailforge, serveur, autres + Google du mois) et le rendement.
+- **Ventes** dans `ventes.json` (global). Sources : script Google `outils/ventes-vers-prospection.gs`
+  installé dans le tableur « Bifco », onglet « Ventes Internes » → `POST /api/ventes/import`
+  (en-tête `X-Ventes-Jeton`, PAS de cookie ; n'envoie que facture, date, montants, source,
+  statut et courriels) ; et saisie manuelle (bouton 💰, `POST /api/resultats/marquer`).
+- **Attribution** : même courriel, sinon même domaine d'entreprise (hors Gmail/Hotmail…), avec
+  un courriel de prospection envoyé AVANT la vente (dernier envoi). Statut « annul/cancel/rembours »
+  = vente exclue. Source contenant « prospection » = attribuée sans campagne.
+- Contacts : `c.interesse` / `c.soumission` (dates ISO), boutons ⭐ 📄 💰 sur réponses et contacts.
+
 ## Structure
 | Fichier | Rôle |
 |---|---|
@@ -87,6 +100,7 @@ qu'à `bifcoshop.com` (boîtes de gestion). Le défaut du code reste Hostinger
 | `public/` | Interface : `index.html`, `login.html`, `app.js`, `style.css` |
 | `outils/demarrer-moteurs.js` | Prépare la campagne « Entreprises » en mode *trouver seulement* (`findOnly`) : aucun envoi tant que l'adresse neuve n'est pas réchauffée. Relançable sans danger. |
 | `outils/propager-cle-google.js` | Copie la clé Google Places d'une campagne vers les 12 autres, sans jamais l'afficher. |
+| `outils/ventes-vers-prospection.gs` | Script Google à coller dans le tableur « Bifco » : envoie chaque nuit les ventes (sans données personnelles hors courriel) à l'app pour l'attribution. |
 | `outils/verifier-envois.mjs` | Tourne **sur SIMA**, pas sur le cloud : vérifie chaque jour ouvrable que les courriels sont partis, alerte sur 3 canaux sinon. Si le cloud est en panne, il ne peut pas signaler sa propre panne. |
 | `DEUX-ECRANS.md` | Deux sessions Claude sur deux écrans, une copie isolée par session |
 | `GUIDE.md` | Guide utilisateur — configuration SMTP/IMAP, usage quotidien |

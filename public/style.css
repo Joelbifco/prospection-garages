@@ -268,3 +268,18 @@ hr { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
 }
 .rc-attente .rc-badge { background: rgba(240,160,32,.18); color: #f0a020; }
 .rc-repondu .rc-badge { background: rgba(74,222,128,.15); color: var(--ok, #4ade80); }
+
+/* Résultats : boutons Intéressé / Soumission / Vendu */
+.res-btns { white-space: nowrap; display: inline-flex; gap: 4px; vertical-align: middle; }
+.res-btn {
+  padding: 3px 7px;
+  font-size: 13px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  opacity: .45;
+  cursor: pointer;
+}
+.res-btn:hover { opacity: .85; }
+.res-btn.on { opacity: 1; border-color: var(--ok, #4ade80); background: rgba(74,222,128,.12); }
+#res-tiles .stat .n { font-size: 24px; }

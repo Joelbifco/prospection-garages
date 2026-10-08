@@ -114,6 +114,7 @@ $$('#tabs button').forEach((b) =>
     if (b.dataset.tab === 'envoi') initSend();
     if (b.dataset.tab === 'reponses') loadReplies();
     if (b.dataset.tab === 'stats') loadStats();
+    if (b.dataset.tab === 'resultats') loadResultats();
     if (b.dataset.tab === 'auto') loadAuto();
     if (b.dataset.tab === 'reglages') loadSettings();
   })
@@ -283,11 +284,13 @@ function renderContacts() {
       <td><select class="cstatus" data-id="${c.id}">
         ${['nouveau', 'contacté', 'répondu', 'partenaire', 'invalide'].map((s) => `<option ${c.status === s ? 'selected' : ''}>${s}</option>`).join('')}
       </select></td>
+      <td class="res-btns">${boutonsResultat(c)}</td>
       <td><button class="ghost cdel" data-id="${c.id}">✕</button></td>
     </tr>`
     )
     .join('');
-  if (!list.length) tb.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">Aucun contact pour ce filtre.</td></tr>';
+  if (!list.length) tb.innerHTML = '<tr><td colspan="9" style="color:var(--muted)">Aucun contact pour ce filtre.</td></tr>';
+  brancherBoutonsResultat(tb, loadContacts);
 
   $$('.cstatus').forEach((s) =>
     s.addEventListener('change', async () => {
@@ -303,6 +306,107 @@ function renderContacts() {
     })
   );
 }
+
+// ================= RÉSULTAT D'UN CONTACT (intéressé / soumission / vendu) =================
+// `c` : { id, interesse, soumission, ventes? } — ventes seulement connues sur les réponses.
+function boutonsResultat(c) {
+  const on = (x) => (x ? ' on' : '');
+  const nbV = (c.ventes || []).length;
+  return (
+    `<button class="res-btn${on(c.interesse)}" data-etape="interesse" data-id="${c.id}" title="Intéressé">⭐</button>` +
+    `<button class="res-btn${on(c.soumission)}" data-etape="soumission" data-id="${c.id}" title="Soumission envoyée">📄</button>` +
+    `<button class="res-btn${on(nbV)}" data-etape="vente" data-id="${c.id}" title="Vendu : saisir le montant">💰${nbV ? ' ' + nbV : ''}</button>`
+  );
+}
+function brancherBoutonsResultat(root, apres) {
+  root.querySelectorAll('.res-btn').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const etape = b.dataset.etape;
+      const body = { contactId: b.dataset.id, etape };
+      if (etape === 'vente') {
+        const m = prompt('Montant de la vente ($) :');
+        if (!m) return;
+        const cout = prompt('Prix payé au fournisseur ($) — facultatif, pour calculer la marge :', '');
+        Object.assign(body, { montant: m, cout: cout || 0 });
+      } else if (b.classList.contains('on')) {
+        if (!confirm(etape === 'interesse' ? 'Retirer « Intéressé » ?' : 'Retirer « Soumission » ?')) return;
+        body.annuler = true;
+      }
+      const r = await api('/resultats/marquer', 'POST', body);
+      if (r.error) return toast(r.error, 'err');
+      toast(etape === 'vente' ? 'Vente enregistrée 💰' : 'Mis à jour', 'ok');
+      if (apres) apres();
+    })
+  );
+}
+
+// ================= RÉSULTATS =================
+const argent = (n) => (Number(n) || 0).toLocaleString('fr-CA', { maximumFractionDigits: 0 }) + ' $';
+const pct = (a, b) => (b ? ((100 * a) / b).toFixed(1) + ' %' : '—');
+
+async function loadResultats() {
+  const jours = $('#res-jours').value;
+  const d = await api('/resultats?jours=' + jours);
+  const t = d.total || {};
+  $('#res-tiles').innerHTML = `
+    <div class="stat"><div class="n">${t.envois || 0}</div><div class="l">Courriels envoyés</div></div>
+    <div class="stat"><div class="n">${t.reponses || 0}</div><div class="l">Réponses (${pct(t.reponses, t.joints)})</div></div>
+    <div class="stat"><div class="n">${t.interesses || 0}</div><div class="l">Intéressés</div></div>
+    <div class="stat"><div class="n">${t.soumissions || 0}</div><div class="l">Soumissions</div></div>
+    <div class="stat ok"><div class="n">${t.ventes || 0}</div><div class="l">Ventes</div></div>
+    <div class="stat ok"><div class="n">${argent(t.ca)}</div><div class="l">Chiffre d'affaires</div></div>
+    <div class="stat ok"><div class="n">${argent(t.marge)}</div><div class="l">Marge (si prix payé connu)</div></div>
+    <div class="stat"><div class="n">${argent(d.couts.periode)}</div><div class="l">Coût de la prospection</div></div>
+    <div class="stat accent"><div class="n">${d.rendement == null ? '—' : d.rendement + ' $'}</div><div class="l">Rapporté par 1 $ dépensé</div></div>`;
+
+  $('#res-campagnes thead').innerHTML =
+    '<tr><th>Campagne</th><th class="num">Envois</th><th class="num">Joints</th><th class="num">Réponses</th><th class="num">Taux</th><th class="num">Intéressés</th><th class="num">Soumissions</th><th class="num">Ventes</th><th class="num">CA</th><th class="num">Marge</th></tr>';
+  $('#res-campagnes tbody').innerHTML = d.campagnes
+    .map((c) => `<tr><td>${esc(c.nom)}</td><td class="num">${c.envois}</td><td class="num">${c.joints}</td><td class="num">${c.reponses}</td><td class="num">${pct(c.reponses, c.joints)}</td><td class="num">${c.interesses}</td><td class="num">${c.soumissions}</td><td class="num"><b>${c.ventes}</b></td><td class="num">${argent(c.ca)}</td><td class="num">${argent(c.marge)}</td></tr>`)
+    .join('');
+
+  $('#res-modeles thead').innerHTML =
+    '<tr><th>Modèle</th><th class="num">Envois</th><th class="num">Contacts joints</th><th class="num">Réponses</th><th class="num">Taux</th><th class="num">Ventes</th><th class="num">CA</th></tr>';
+  $('#res-modeles tbody').innerHTML =
+    d.modeles.map((m) => `<tr><td>${esc(m.modele)}</td><td class="num">${m.envois}</td><td class="num">${m.joints}</td><td class="num">${m.reponses}</td><td class="num">${pct(m.reponses, m.joints)}</td><td class="num">${m.ventes}</td><td class="num">${argent(m.ca)}</td></tr>`).join('') ||
+    '<tr><td colspan="7" style="color:var(--muted)">Aucun envoi sur la période.</td></tr>';
+
+  $('#res-ventes thead').innerHTML =
+    '<tr><th>Date</th><th>Client prospecté</th><th>Campagne</th><th class="num">Montant</th><th class="num">Marge</th><th>Comment</th><th>1er courriel</th></tr>';
+  $('#res-ventes tbody').innerHTML =
+    d.ventes.map((v) => `<tr><td>${new Date(v.date).toLocaleDateString('fr-CA')}</td><td>${esc(v.nom) || '—'}${v.facture ? ` <small style="color:var(--muted)">#${esc(v.facture)}</small>` : ''}</td><td>${esc(v.campagne)}</td><td class="num">${argent(v.montant)}</td><td class="num">${v.cout ? argent(v.montant - v.cout) : '—'}</td><td><small>${esc(v.methode)}${v.source === 'tableur' ? ' · tableur' : ''}</small></td><td>${v.premierEnvoi ? new Date(v.premierEnvoi).toLocaleDateString('fr-CA') : '—'}</td></tr>`).join('') ||
+    '<tr><td colspan="7" style="color:var(--muted)">Aucune vente attribuée sur la période pour l\'instant.</td></tr>';
+
+  const cfg = d.couts.config;
+  $('#res-mailforge').value = cfg.mailforgeMensuel;
+  $('#res-serveur').value = cfg.serveurMensuel;
+  $('#res-autres').value = cfg.autresMensuel;
+
+  const im = d.importTableur || {};
+  const el = $('#res-import');
+  if (im.at) {
+    el.className = 'status done';
+    el.innerHTML = `Dernière réception : <b>${new Date(im.at).toLocaleString('fr-CA', { dateStyle: 'medium', timeStyle: 'short' })}</b><br>` +
+      `${im.totalImportees} ventes connues · ${im.nonAttribuees} sans lien avec la prospection sur la période`;
+  } else {
+    el.className = 'status';
+    el.textContent = 'Le script du tableur n\'a encore rien envoyé.';
+  }
+}
+$('#res-jours').addEventListener('change', loadResultats);
+$('#btn-res-couts').addEventListener('click', async () => {
+  await api('/resultats/config', 'POST', {
+    mailforgeMensuel: $('#res-mailforge').value,
+    serveurMensuel: $('#res-serveur').value,
+    autresMensuel: $('#res-autres').value,
+  });
+  toast('Coûts enregistrés', 'ok');
+  loadResultats();
+});
+$('#btn-res-jeton').addEventListener('click', async () => {
+  const c = await api('/resultats/config');
+  $('#res-jeton').textContent = c.jeton;
+});
 
 // ================= ENTONNOIR =================
 const STAGE_COLORS = {
@@ -594,6 +698,7 @@ async function loadReplies() {
       <div class="rc-actions">
         <button class="primary rc-send" data-id="${esc(r.contactId)}">📧 Répondre</button>
         ${r.contactId ? `<button class="rc-voir" data-id="${esc(r.contactId)}">📄 Voir la conversation</button>` : ''}
+        ${r.contactId ? `<span class="res-btns">${boutonsResultat({ id: r.contactId, interesse: r.interesse, soumission: r.soumission, ventes: r.ventes })}</span>` : ''}
         <span class="rc-sent" style="color:var(--ok);font-size:13px"></span>
       </div>
       <div class="rc-sent-email" style="display:none"></div>
@@ -625,6 +730,8 @@ async function loadReplies() {
       }
     })
   );
+
+  brancherBoutonsResultat(box, loadReplies);
 
   // « Voir mon courriel envoyé » : affiche/masque le(s) courriel(s) d'origine.
   $$('.rc-voir').forEach((btn) =>

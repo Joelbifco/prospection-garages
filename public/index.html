@@ -35,6 +35,7 @@
     <button data-tab="envoi">📤 Envoi</button>
     <button data-tab="reponses">💬 Réponses</button>
     <button data-tab="stats">📊 Stats</button>
+    <button data-tab="resultats">💰 Résultats</button>
     <button data-tab="auto">🤖 Auto</button>
     <button data-tab="reglages">⚙️ Réglages</button>
   </nav>
@@ -100,7 +101,7 @@
         <div class="table-wrap">
           <table id="contacts-table">
             <thead>
-              <tr><th></th><th>Garage</th><th>Courriel</th><th>Région</th><th>Courriels</th><th>Stade</th><th>Statut</th><th></th></tr>
+              <tr><th></th><th>Garage</th><th>Courriel</th><th>Région</th><th>Courriels</th><th>Stade</th><th>Statut</th><th>Résultat</th><th></th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -226,6 +227,62 @@
         <div class="card side">
           <h2>Par zone</h2>
           <ul id="zone-list" class="barlist"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ RÉSULTATS ============ -->
+    <section id="tab-resultats" class="tab">
+      <div class="card">
+        <div class="results-head">
+          <h2>💰 Résultats : du courriel à la vente</h2>
+          <label style="margin:0">Période
+            <select id="res-jours">
+              <option value="7">7 derniers jours</option>
+              <option value="30" selected>30 derniers jours</option>
+              <option value="90">90 derniers jours</option>
+              <option value="0">Depuis le début</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint">Toutes les campagnes ensemble. Une vente compte pour la prospection quand le client a reçu un de nos courriels <b>avant</b> d'acheter (même courriel ou même entreprise), ou quand tu la marques à la main (bouton 💰 sur une réponse ou un contact).</p>
+        <div class="stat-grid" id="res-tiles"></div>
+      </div>
+      <div class="card">
+        <h2>Par campagne</h2>
+        <div class="table-wrap">
+          <table id="res-campagnes"><thead></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Par modèle de courriel</h2>
+        <p class="hint">Réponses et ventes rattachées au <b>premier</b> courriel reçu par le contact.</p>
+        <div class="table-wrap">
+          <table id="res-modeles"><thead></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Ventes attribuées à la prospection</h2>
+        <div class="table-wrap">
+          <table id="res-ventes"><thead></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <div class="split">
+        <div class="card grow">
+          <h2>Coûts mensuels de la prospection</h2>
+          <p class="hint">Servent à calculer le rendement. Google est ajouté automatiquement (au-delà des 1 000 requêtes gratuites du mois).</p>
+          <div class="send-controls">
+            <label>Mailforge ($/mois) <input id="res-mailforge" type="number" min="0" step="1" /></label>
+            <label>Serveur ($/mois) <input id="res-serveur" type="number" min="0" step="1" /></label>
+            <label>Autres ($/mois) <input id="res-autres" type="number" min="0" step="1" /></label>
+            <button id="btn-res-couts" class="primary">Enregistrer</button>
+          </div>
+        </div>
+        <div class="card side">
+          <h2>Tableur « Ventes Internes »</h2>
+          <div id="res-import" class="status"></div>
+          <button id="btn-res-jeton" class="ghost">🔑 Afficher le jeton du script</button>
+          <p class="hint" id="res-jeton" style="word-break:break-all"></p>
         </div>
       </div>
     </section>
