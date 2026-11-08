@@ -2430,6 +2430,41 @@ async function notifyCampaignProblem(campaign, message) {
   });
 }
 
+// Alerte « crédits de vérification bas » (MillionVerifier) — FILET si l'auto-top-up
+// échoue (carte expirée/refusée). Au plus une alerte par jour.
+let derniereVerifMv = '';
+async function notifyMvLowCredits(credits, seuil) {
+  const gset = await firstWorkingSmtp();
+  if (!gset) return;
+  const to = (gset.auto?.notifyEmail || 'ventes@bifco.shop').trim();
+  const transport = makeTransport(gset);
+  const fromLine = gset.from?.name ? `"${gset.from.name}" <${gset.from.email}>` : gset.from?.email;
+  await transport.sendMail({
+    from: fromLine,
+    to,
+    subject: `⚠️ Vérification des adresses — plus que ${credits} crédits`,
+    text:
+      'Bonjour,\n\n' +
+      `Il reste ${credits} crédits de vérification MillionVerifier (seuil d'alerte : ${seuil}).\n\n` +
+      "Normalement l'auto-top-up recharge tout seul. Si tu reçois ce courriel, c'est qu'il n'a " +
+      'PAS rechargé (carte expirée ou refusée ?). À 0 crédit, les courriels repartent SANS ' +
+      'vérification et les rebonds reviennent.\n\n' +
+      'Recharge : https://app.millionverifier.com/topup\n\n' +
+      '— Gardien de campagne',
+  });
+}
+async function checkMvCreditsAndAlert() {
+  if (!mvActif()) return;
+  if (derniereVerifMv === todayStr()) return; // une vérif (et au plus une alerte) par jour
+  derniereVerifMv = todayStr();
+  const credits = await mvCredits();
+  if (credits == null) return;
+  const seuil = Number(lireMvConfig().seuilAlerte) || 1000;
+  if (credits >= seuil) return;
+  try { await notifyMvLowCredits(credits, seuil); } catch (e) { console.log('  ⚠️  Alerte crédits MV non envoyée :', e.message); }
+  console.log(`  🔔  Crédits MillionVerifier bas : ${credits} (seuil ${seuil}) — alerte envoyée`);
+}
+
 async function checkCampaignHealthAndAlert() {
   const now = new Date();
   const dow = now.getDay();
@@ -3540,6 +3575,7 @@ async function autoTick() {
   try {
     // Paliers des boîtes (une fois par jour, AVANT l'envoi pour qu'il en profite).
     try { await evaluerPaliers(); } catch (e) { console.log('  ⚠️  Évaluation des paliers échouée :', e.message); }
+    try { await checkMvCreditsAndAlert(); } catch (e) { console.log('  ⚠️  Vérif crédits MillionVerifier échouée :', e.message); }
     // Phase 1 — ENVOI (séquentiel, rapide)
     for (const camp of CAMPAIGNS) {
       try {

@@ -74,6 +74,7 @@ let envoyesTotal = 0;
 let reserveTotale = 0;
 let aCourt = [];       // campagnes à moins d'une semaine de réserve
 let auxRelances = [];  // campagnes sans aucun nouveau contact (que des relances)
+let creditsMv = null;  // crédits MillionVerifier restants (null = inconnu / désactivé)
 try {
   const login = await ftimeout(BASE + '/api/login', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -95,6 +96,12 @@ try {
       aCourt.push(`${c.nom} (~${c.reserveJours} j)`);
     }
   }
+  // Crédits de vérification d'adresses (MillionVerifier) — même session cloud.
+  try {
+    const rc = await ftimeout(BASE + '/api/millionverifier', { headers: { Cookie: cookie } }, 15000);
+    const mv = await rc.json();
+    if (mv && mv.actif && mv.aUneClef && typeof mv.credits === 'number') creditsMv = mv.credits;
+  } catch { /* endpoint absent/injoignable : pas d'alerte crédits */ }
   if (envoyesTotal === 0) probleme = `Aucun courriel envoyé aujourd'hui (${aujourdhui}). La prospection est ARRÊTÉE.`;
 } catch (e) {
   probleme = `Le serveur cloud est INJOIGNABLE (${e.message}). Les envois sont probablement arrêtés.`;
@@ -110,7 +117,9 @@ sauverEtat();
 //                   plus (elles ne font que des relances) → il faut ratisser.
 //   3) TOUT VA BIEN.
 const alerteReserve = !probleme && (aCourt.length > 0 || auxRelances.length > 0);
-const estAlerte = Boolean(probleme) || alerteReserve;
+const SEUIL_MV = Number(conf.seuilCreditsMv ?? 1000); // crédits restants sous lesquels on alerte (filet si l'auto-top-up échoue)
+const alerteCredits = creditsMv !== null && creditsMv < SEUIL_MV;
+const estAlerte = Boolean(probleme) || alerteReserve || alerteCredits;
 
 // Bloc « réserve » réutilisé dans le corps (listes des campagnes concernées).
 function blocReserve() {
@@ -165,8 +174,23 @@ if (probleme) {
     '— SIMA veille sur ta prospection.';
 }
 
+// Crédits de vérification bas : on ajoute une ligne au rapport et, si c'est la
+// SEULE alerte, on en fait le sujet et la bulle.
+if (alerteCredits) {
+  log('CREDITS VERIF BAS — ' + creditsMv);
+  const ligne =
+    `⚠️ Vérification des adresses : plus que ${creditsMv} crédits MillionVerifier ` +
+    `(seuil ${SEUIL_MV}). À 0 crédit, les courriels repartent SANS vérification et les ` +
+    `rebonds reviennent. Recharge : https://app.millionverifier.com/topup`;
+  corps += '\n\n' + ligne;
+  if (!probleme && !alerteReserve) {
+    sujet = `⚠️ Prospection Bifco — crédits de vérification bas (${creditsMv})`;
+    toastMsg = `Credits verification bas : ${creditsMv} (recharger MillionVerifier)`;
+  }
+}
+
 // 1) Notification sur SIMA (bulle Windows) — seulement en cas d'ALERTE
-//    (panne d'envoi OU réserve bientôt épuisée).
+//    (panne d'envoi, réserve bientôt épuisée, OU crédits de vérification bas).
 if (estAlerte) try {
   const msg = (toastMsg || 'Prospection : à vérifier').replace(/'/g, ' ');
   const ps =
@@ -181,12 +205,12 @@ if (estAlerte) try {
 
 // 2) Notification PUSH sur le téléphone via ntfy.sh (gratuit, aucun compte).
 //    Joel installe l'app « ntfy » et s'abonne au sujet (conf.ntfyTopic).
-if (conf.ntfyTopic) {
+if (conf.ntfyTopic && estAlerte) {
   try {
     await ftimeout('https://ntfy.sh/' + conf.ntfyTopic, {
       method: 'POST',
       headers: { Title: 'Prospection Bifco - ALERTE', Priority: 'urgent', Tags: 'warning,email' },
-      body: probleme,
+      body: toastMsg || probleme || 'Prospection : à vérifier',
     }, 15000);
     log('push ntfy envoyé (sujet ' + conf.ntfyTopic + ').');
   } catch (e) { log('push ntfy échoué : ' + e.message); }
