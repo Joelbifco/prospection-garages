@@ -3029,7 +3029,8 @@ async function handleApi(req, res, url) {
         frac = Math.max(1, (Date.now() - first) / (30 * 86400000));
       }
       const cout = Math.round(fixe * frac + googleMois * (jours ? Math.min(1, jours / 30) : 1));
-      return { ventes: v.length, ca, marge, cout, ecart: Math.round(ca - cout) };
+      // Net HONNÊTE = marge (CA − coût des pièces) − coûts de prospection.
+      return { ventes: v.length, ca, marge, cout, net: Math.round(marge - cout) };
     }
     return sendJSON(res, 200, {
       devise: 'USD',
