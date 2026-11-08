@@ -2556,6 +2556,7 @@ function resultatsConfig() {
   if (c.mailforgeMensuel == null) { c.mailforgeMensuel = 45; change = true; } // 15 boîtes × 3 $
   if (c.serveurMensuel == null) { c.serveurMensuel = 12; change = true; }
   if (c.autresMensuel == null) { c.autresMensuel = 0; change = true; }
+  if (c.millionverifierMensuel == null) { c.millionverifierMensuel = 35; change = true; } // vérif adresses (~10k/mois × 0,0035 $)
   if (change) ecrireJson(RESULTATS_CONFIG_FILE, c);
   return c;
 }
@@ -2977,11 +2978,32 @@ async function handleApi(req, res, url) {
   if (p === '/api/resultats/config' && method === 'POST') {
     const body = await readBody(req);
     const c = resultatsConfig();
-    for (const k of ['mailforgeMensuel', 'serveurMensuel', 'autresMensuel']) {
+    for (const k of ['mailforgeMensuel', 'serveurMensuel', 'autresMensuel', 'millionverifierMensuel']) {
       if (body[k] != null) c[k] = Math.max(0, Number(body[k]) || 0);
     }
     ecrireJson(RESULTATS_CONFIG_FILE, c);
     return sendJSON(res, 200, { ok: true });
+  }
+
+  // Budget mensuel TOTAL de la prospection (consommé par SIMA).
+  // Fixes (Mailforge, serveur, MillionVerifier, autres) + Google du mois (variable).
+  if (p === '/api/couts' && method === 'GET') {
+    const conf = resultatsConfig();
+    const g = googleUsage();
+    const requetes = Number(g && g.u && g.u.total) || 0;
+    const google = Math.round(Math.max(0, requetes - 1000) * 0.035);
+    const mailforge = Number(conf.mailforgeMensuel) || 0;
+    const serveur = Number(conf.serveurMensuel) || 0;
+    const millionverifier = Number(conf.millionverifierMensuel) || 0;
+    const autres = Number(conf.autresMensuel) || 0;
+    const total = mailforge + serveur + millionverifier + autres + google;
+    return sendJSON(res, 200, {
+      mois: (g && g.u && g.u.mois) || new Date().toISOString().slice(0, 7),
+      devise: 'USD',
+      postes: { mailforge, serveur, millionverifier, autres, google },
+      googleRequetes: requetes,
+      total,
+    });
   }
 
   // Paliers d'envoi par boîte (montée progressive 30 → 50) et santé sur 7 jours.
