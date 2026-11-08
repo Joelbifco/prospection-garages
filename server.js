@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import dnsMod, { promises as dns } from 'node:dns';
+import https from 'node:https';
 
 // Le serveur (DigitalOcean) n'a PAS de route IPv6. Or smtp.hostinger.com /
 // imap.hostinger.com répondent parfois en IPv6 (via Cloudflare) : Node essaie
@@ -1289,6 +1290,23 @@ function mvActif() {
   return !!(c.actif && c.apiKey);
 }
 const mvCache = new Map(); // email → verdict, pour la durée du process
+// GET JSON via le module https de Node. On n'utilise PAS fetch ici : l'API
+// MillionVerifier déclenche une AssertionError d'undici (« false == true » dans
+// Parser.finish) à la fin de la connexion, émise hors de la chaîne await donc
+// non rattrapable par try/catch. Le module https, lui, termine proprement.
+function mvGetJson(url, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, (r) => {
+      let data = '';
+      r.setEncoding('utf8');
+      r.on('data', (ch) => { data += ch; });
+      r.on('end', () => { try { resolve(JSON.parse(data)); } catch (err) { reject(err); } });
+      r.on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs || 15000, () => { req.destroy(new Error('timeout')); });
+  });
+}
 // Verdicts : 'valide' | 'invalide' | 'risque' | 'inconnu' | 'off'
 async function verifierAdresse(email) {
   const e = String(email || '').trim().toLowerCase();
@@ -1300,8 +1318,7 @@ async function verifierAdresse(email) {
   try {
     const url = 'https://api.millionverifier.com/api/v3/?api=' + encodeURIComponent(cfg.apiKey)
       + '&email=' + encodeURIComponent(e) + '&timeout=10';
-    const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    const j = await r.json();
+    const j = await mvGetJson(url, 15000);
     const result = String(j.result || '').toLowerCase();
     if (result === 'ok') verdict = 'valide';
     else if (result === 'invalid' || result === 'disposable') verdict = 'invalide';
@@ -1316,9 +1333,7 @@ async function mvCredits() {
   const cfg = lireMvConfig();
   if (!cfg.apiKey) return null;
   try {
-    const r = await fetch('https://api.millionverifier.com/api/v3/credits?api=' + encodeURIComponent(cfg.apiKey),
-      { signal: AbortSignal.timeout(10000) });
-    const j = await r.json();
+    const j = await mvGetJson('https://api.millionverifier.com/api/v3/credits?api=' + encodeURIComponent(cfg.apiKey), 10000);
     return Number(j.credits);
   } catch { return null; }
 }
