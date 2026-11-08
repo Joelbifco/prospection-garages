@@ -1265,6 +1265,64 @@ async function verdictMx(domain) {
   }
 }
 
+// ---------------------------------------------------------------------------
+//  Vérification d'adresse en TEMPS RÉEL — MillionVerifier
+//  Le MX ne voit que le DOMAINE : gmail.com existe toujours, mais la BOÎTE
+//  « jean@gmail.com » peut être morte → rebond. MillionVerifier teste la boîte
+//  elle-même (ce que le MX ne peut pas faire) : c'est ça qui fait tomber les
+//  rebonds sous 2 % et laisse les boîtes monter à 50/jour toutes seules.
+//  • Clé rangée HORS DÉPÔT dans data/millionverifier.json (jamais sur GitHub).
+//  • Appelée seulement au moment d'ENVOYER → on ne paie que les adresses qu'on
+//    contacte vraiment, pas les milliers en réserve.
+//  • Résultat mis en CACHE sur le contact (c.mvVerdict) → une adresse n'est
+//    jamais revérifiée, donc jamais repayée.
+//  • En panne (réseau, crédits épuisés) : « inconnu » → on NE BLOQUE PAS, on
+//    laisse l'envoi se faire comme avant. Jamais de bon contact perdu à tort.
+//  • Dormant tant qu'aucune clé active n'est présente : comportement inchangé.
+// ---------------------------------------------------------------------------
+const MV_FILE = path.join(DATA_DIR, 'millionverifier.json');
+function lireMvConfig() {
+  try { return JSON.parse(readFileSync(MV_FILE, 'utf8')); } catch { return {}; }
+}
+function mvActif() {
+  const c = lireMvConfig();
+  return !!(c.actif && c.apiKey);
+}
+const mvCache = new Map(); // email → verdict, pour la durée du process
+// Verdicts : 'valide' | 'invalide' | 'risque' | 'inconnu' | 'off'
+async function verifierAdresse(email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!e) return 'invalide';
+  if (mvCache.has(e)) return mvCache.get(e);
+  const cfg = lireMvConfig();
+  if (!cfg.actif || !cfg.apiKey) return 'off';
+  let verdict = 'inconnu';
+  try {
+    const url = 'https://api.millionverifier.com/api/v3/?api=' + encodeURIComponent(cfg.apiKey)
+      + '&email=' + encodeURIComponent(e) + '&timeout=10';
+    const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    const j = await r.json();
+    const result = String(j.result || '').toLowerCase();
+    if (result === 'ok') verdict = 'valide';
+    else if (result === 'invalid' || result === 'disposable') verdict = 'invalide';
+    else if (result === 'catch_all' || result === 'unknown') verdict = 'risque'; // ambigu → on laisse passer
+    else verdict = 'inconnu'; // error, crédits épuisés… → on ne bloque pas
+  } catch { verdict = 'inconnu'; } // panne réseau/API → fail open
+  mvCache.set(e, verdict);
+  return verdict;
+}
+// Solde de crédits (pour l'interface). Ne révèle JAMAIS la clé.
+async function mvCredits() {
+  const cfg = lireMvConfig();
+  if (!cfg.apiKey) return null;
+  try {
+    const r = await fetch('https://api.millionverifier.com/api/v3/credits?api=' + encodeURIComponent(cfg.apiKey),
+      { signal: AbortSignal.timeout(10000) });
+    const j = await r.json();
+    return Number(j.credits);
+  } catch { return null; }
+}
+
 async function keepDeliverable(items) {
   const out = [];
   for (const it of items) {
@@ -1360,6 +1418,7 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
   let skippedDuplicate = 0;
   let skippedInvalid = 0;
   let skippedNoMx = 0; // domaine sans serveur de courriel → écarté sans envoi
+  let skippedMv = 0; // boîte morte détectée par MillionVerifier → écartée sans envoi
   let rejetes = 0; // adresses refusées par le serveur (5.1.x) → marquées invalides
   let fatal = ''; // message de l'erreur fatale qui a interrompu le lot (vide = aucun)
   for (let i = 0; i < targets.length; i++) {
@@ -1381,6 +1440,19 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
       if (k >= 0) contacts[k].status = 'invalide';
       skippedNoMx++;
       continue;
+    }
+    // Vérification de la BOÎTE (MillionVerifier). Uniquement si la clé est active
+    // ET si ce contact n'a jamais été vérifié (cache → jamais repayé). Le MX est
+    // déjà passé : on ne dépense un crédit que sur une adresse vraiment envoyable.
+    if (mvActif() && !c.mvVerdict) {
+      const vd = await verifierAdresse(c.email);
+      const k = contacts.findIndex((x) => x.id === c.id);
+      if (vd === 'invalide') {
+        if (k >= 0) { contacts[k].status = 'invalide'; contacts[k].mvVerdict = vd; contacts[k].mvLe = todayStr(); }
+        skippedMv++;
+        continue; // boîte morte → jamais d'envoi (c'est ça qui tue les rebonds)
+      }
+      if (vd !== 'off' && k >= 0) { contacts[k].mvVerdict = vd; contacts[k].mvLe = todayStr(); }
     }
     const subject = renderTemplate(tpl.subject, c);
     const text = buildEmailBody(renderTemplate(tpl.body, c), settings);
@@ -1438,7 +1510,7 @@ async function deliverToContacts(settings, tpl, targets, sends, contacts) {
       await sleep(Number(settings.sendDelayMs) || 0);
     }
   }
-  return { results, skippedDuplicate, skippedInvalid, skippedNoMx, rejetes, fatal };
+  return { results, skippedDuplicate, skippedInvalid, skippedNoMx, skippedMv, rejetes, fatal };
 }
 
 // ---------------------------------------------------------------------------
@@ -1508,11 +1580,13 @@ async function runSendOnce(force = false) {
   let results = [];
   let fatal = '';
   let rejetes = 0; // adresses refusées : la faute du contact, pas de la boîte
+  let ecarteesMv = 0; // boîtes mortes attrapées par MillionVerifier (jamais envoyées)
   if (targets.length) {
     const out = await deliverToContacts(settings, tpl, targets, sends, contacts);
     results = out.results;
     fatal = out.fatal || '';
     rejetes += out.rejetes || 0;
+    ecarteesMv += out.skippedMv || 0;
   }
   const ok = results.filter((r) => r.status === 'ok').length;
 
@@ -1552,6 +1626,7 @@ async function runSendOnce(force = false) {
         const out = await deliverToContacts(settings, grp.tpl, grp.cs, sends, contacts);
         relancesOk += out.results.filter((r) => r.status === 'ok').length;
         rejetes += out.rejetes || 0;
+        ecarteesMv += out.skippedMv || 0;
         if (out.fatal) { fatal = out.fatal; break; }
       }
     }
@@ -1590,6 +1665,7 @@ async function runSendOnce(force = false) {
     failed: results.length - ok,
     template: tpl.name,
     echecComplet,
+    boitesMortes: ecarteesMv || undefined, // adresses mortes écartées par MillionVerifier
     fatal: fatal || undefined,
   };
   await save('sends', sends);
@@ -2877,6 +2953,36 @@ async function handleApi(req, res, url) {
   if (p === '/api/google-usage/reset' && method === 'POST') {
     googleSearchCount = 0;
     return sendJSON(res, 200, { ok: true, searches: 0 });
+  }
+
+  // --- MillionVerifier : vérification d'adresse en temps réel ---
+  // GET  → état (actif, clé présente, solde de crédits) SANS jamais exposer la clé.
+  // POST → enregistre/active la clé (data/millionverifier.json, hors dépôt) et
+  //        la teste tout de suite via le solde de crédits.
+  if (p === '/api/millionverifier' && method === 'GET') {
+    const cfg = lireMvConfig();
+    return sendJSON(res, 200, {
+      actif: !!cfg.actif,
+      aUneClef: !!cfg.apiKey,
+      credits: cfg.apiKey ? await mvCredits() : null,
+    });
+  }
+  if (p === '/api/millionverifier' && method === 'POST') {
+    const body = await readBody(req);
+    const cur = lireMvConfig();
+    const next = {
+      apiKey: (body.apiKey != null ? String(body.apiKey).trim() : cur.apiKey) || '',
+      actif: body.actif != null ? !!body.actif : !!cur.actif,
+    };
+    writeFileSync(MV_FILE, JSON.stringify(next));
+    const credits = next.apiKey ? await mvCredits() : null;
+    return sendJSON(res, 200, {
+      ok: true,
+      actif: next.actif,
+      aUneClef: !!next.apiKey,
+      credits,
+      cleValide: credits != null, // le solde a répondu → la clé fonctionne
+    });
   }
 
   // --- Gardien de livraison : état SPF/DKIM/DMARC/MX de la campagne courante ---
