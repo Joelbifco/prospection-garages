@@ -2954,7 +2954,7 @@ async function handleApi(req, res, url) {
     const g = googleUsage();
     const googleMois = Math.max(0, g.u.total - 1000) * 0.035;
     const moisPeriode = jours ? jours / 30 : Math.max(1, (Date.now() - premierEnvoiGlobal) / (30 * 86400000));
-    const fixe = (Number(conf.mailforgeMensuel) || 0) + (Number(conf.serveurMensuel) || 0) + (Number(conf.autresMensuel) || 0);
+    const fixe = (Number(conf.mailforgeMensuel) || 0) + (Number(conf.serveurMensuel) || 0) + (Number(conf.millionverifierMensuel) || 0) + (Number(conf.autresMensuel) || 0);
     const cout = Math.round(fixe * moisPeriode + googleMois);
     const nonAttribuees = store.ventes.filter((v) => v.source !== 'manuel' && !v.attribution && dans(v.date)).length;
     return sendJSON(res, 200, {
@@ -3003,6 +3003,46 @@ async function handleApi(req, res, url) {
       postes: { mailforge, serveur, millionverifier, autres, google },
       googleRequetes: requetes,
       total,
+    });
+  }
+
+  // Profit par période (semaine / mois / global) pour SIMA : « est-ce que je fais
+  // de l'argent ? ». ATTENTION : le CA vient des ventes ATTRIBUÉES à la prospection
+  // (peu nombreuses, attribution imparfaite) → c'est un indicateur, pas la compta.
+  if (p === '/api/profit' && method === 'GET') {
+    const conf = resultatsConfig();
+    const g = googleUsage();
+    const googleMois = Math.max(0, (Number(g && g.u && g.u.total) || 0) - 1000) * 0.035;
+    const fixe = (Number(conf.mailforgeMensuel) || 0) + (Number(conf.serveurMensuel) || 0)
+      + (Number(conf.millionverifierMensuel) || 0) + (Number(conf.autresMensuel) || 0);
+    const store = lireJson(VENTES_FILE, { ventes: [] });
+    const attribuees = store.ventes.filter((v) => v.attribution && v.attribution.campagne && !venteAnnulee(v));
+    function bloc(jours) {
+      const depuis = jours ? Date.now() - jours * 86400000 : 0;
+      const v = attribuees.filter((x) => x.date && new Date(x.date).getTime() >= depuis);
+      const ca = Math.round(v.reduce((t, x) => t + (Number(x.montant) || 0), 0));
+      const marge = Math.round(v.reduce((t, x) => t + (x.cout ? (Number(x.montant) || 0) - Number(x.cout) : 0), 0));
+      let frac;
+      if (jours) frac = jours / 30;
+      else {
+        const first = v.length ? Math.min(...v.map((x) => new Date(x.date).getTime())) : Date.now();
+        frac = Math.max(1, (Date.now() - first) / (30 * 86400000));
+      }
+      const cout = Math.round(fixe * frac + googleMois * (jours ? Math.min(1, jours / 30) : 1));
+      return { ventes: v.length, ca, marge, cout, ecart: Math.round(ca - cout) };
+    }
+    return sendJSON(res, 200, {
+      devise: 'USD',
+      semaine: bloc(7),
+      mois: bloc(30),
+      global: bloc(0),
+      postesMois: {
+        mailforge: Number(conf.mailforgeMensuel) || 0,
+        serveur: Number(conf.serveurMensuel) || 0,
+        millionverifier: Number(conf.millionverifierMensuel) || 0,
+        autres: Number(conf.autresMensuel) || 0,
+        google: Math.round(googleMois),
+      },
     });
   }
 
