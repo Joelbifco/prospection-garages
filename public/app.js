@@ -965,7 +965,11 @@ async function loadMv() {
     } else {
       st.className = 'status done';
       st.innerHTML = (m.actif ? '✅ Vérification active' : '⏸️ Clé enregistrée mais désactivée')
-        + (m.credits != null ? ` · <b>${m.credits}</b> crédits restants` : '');
+        + (m.credits != null ? ` · <b>${m.credits}</b> crédits restants` : '')
+        + (typeof m.pretes === 'number'
+            ? `<br>📬 <b>${m.pretes}</b> adresses vérifiées prêtes à envoyer`
+              + (m.enAttente ? ` · <b>${m.enAttente}</b> en attente de vérification` : '')
+            : '');
     }
   } catch { /* endpoint absent (vieux serveur) : on n'affiche rien */ }
 }

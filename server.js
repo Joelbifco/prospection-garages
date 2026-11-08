@@ -2996,10 +2996,26 @@ async function handleApi(req, res, url) {
   //        la teste tout de suite via le solde de crédits.
   if (p === '/api/millionverifier' && method === 'GET') {
     const cfg = lireMvConfig();
+    // Avance réelle : adresses « nouveau » déjà vérifiées (prêtes à envoyer) vs
+    // encore en attente de vérification, toutes campagnes confondues.
+    let pretes = 0, enAttente = 0;
+    if (cfg.apiKey) {
+      for (const c of CAMPAIGNS) {
+        try {
+          const cs = await campaignCtx.run(c.id, () => load('contacts'));
+          for (const x of cs) {
+            if (!x.email || x.status !== 'nouveau') continue;
+            if (x.mvVerdict) pretes++; else enAttente++;
+          }
+        } catch { /* campagne illisible : on l'ignore */ }
+      }
+    }
     return sendJSON(res, 200, {
       actif: !!cfg.actif,
       aUneClef: !!cfg.apiKey,
       credits: cfg.apiKey ? await mvCredits() : null,
+      pretes,
+      enAttente,
     });
   }
   if (p === '/api/millionverifier' && method === 'POST') {
@@ -3565,6 +3581,32 @@ function forEachCampaign(fn) {
 // le suivant est simplement sauté ; on ne perd rien (garde interne par date).
 let tickBusy = false;
 let tickSince = 0;
+// Pré-vérification EN AVANCE (MillionVerifier) : teste les contacts du bassin
+// AVANT l'envoi, pour que la réserve reflète les adresses VRAIMENT envoyables et
+// qu'on connaisse son avance réelle. Tourne en arrière-plan, plafonnée par passage
+// (ne dépense pas tout d'un coup, ne ralentit pas l'envoi). Les adresses mortes
+// passent en « invalide » ; les bonnes gardent « nouveau » avec un verdict en cache
+// (donc l'envoi ne les revérifie pas). Une panne/0 crédit n'inscrit rien → réessai.
+async function runVerifyPass(maxParTick) {
+  if (!mvActif()) return { skipped: 'mv-off' };
+  if (maxParTick <= 0) return { skipped: 'budget-0' };
+  const contacts = await load('contacts');
+  const aVerifier = contacts.filter((c) => c.email && c.status === 'nouveau' && !c.mvVerdict);
+  if (!aVerifier.length) return { skipped: 'rien' };
+  let verifies = 0, invalides = 0;
+  for (const c of aVerifier.slice(0, maxParTick)) {
+    const vd = await verifierAdresse(c.email);
+    if (vd === 'off') break; // désactivé entre-temps
+    if (vd === 'inconnu') continue; // panne / crédits épuisés → on n'inscrit rien, réessai plus tard
+    c.mvVerdict = vd;
+    c.mvLe = todayStr();
+    if (vd === 'invalide') { c.status = 'invalide'; invalides++; }
+    verifies++;
+  }
+  if (verifies) await save('contacts', contacts);
+  return { verifies, invalides, restants: Math.max(0, aVerifier.length - verifies) };
+}
+
 async function autoTick() {
   if (tickBusy) {
     console.log(`  ⏭️  Passage automatique sauté : le précédent tourne encore depuis ${Math.round((Date.now() - tickSince) / 60000)} min`);
@@ -3598,6 +3640,21 @@ async function autoTick() {
         const r = await campaignCtx.run(camp.id, () => runHarvestOnce());
         if (r && !r.skipped) console.log(`  🔎  [${camp.id}] Ratissage :`, JSON.stringify(r));
       } catch (e) { console.log(`  ⚠️  [${camp.id}] Ratissage échoué :`, e.message); }
+    }
+    // Phase 3 — PRÉ-VÉRIFICATION des adresses, en avance, plafonnée GLOBALEMENT
+    // pour ne pas tout dépenser ni étirer le passage. Les plus à sec d'abord.
+    if (mvActif()) {
+      let budget = Number(lireMvConfig().verifParTick) || 150;
+      for (const camp of parReserve) {
+        if (budget <= 0) break;
+        try {
+          const r = await campaignCtx.run(camp.id, () => runVerifyPass(budget));
+          if (r && r.verifies) {
+            budget -= r.verifies;
+            console.log(`  🛡️  [${camp.id}] Vérif avance : ${r.verifies} testées, ${r.invalides} invalides, ${r.restants} restantes`);
+          }
+        } catch (e) { console.log(`  ⚠️  [${camp.id}] Vérif avance échouée :`, e.message); }
+      }
     }
   } finally {
     tickBusy = false;
