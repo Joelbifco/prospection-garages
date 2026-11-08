@@ -948,6 +948,26 @@ async function loadSettings() {
   $('#wu-enabled').checked = !!w.enabled;
   $('#wu-max').value = String(w.maxPerDay || 50);
   updateWuInfo();
+  loadMv();
+}
+
+// Vérification MillionVerifier — réglage GLOBAL (une clé pour toutes les
+// campagnes), donc son propre endpoint, pas /settings. La clé n'est JAMAIS
+// renvoyée par le serveur : le champ reste vide, seul l'état s'affiche.
+async function loadMv() {
+  try {
+    const m = await api('/millionverifier');
+    $('#mv-actif').checked = !!m.actif;
+    const st = $('#mv-status');
+    if (!m.aUneClef) {
+      st.className = 'status';
+      st.textContent = 'Aucune clé — vérification désactivée (les adresses partent sans test).';
+    } else {
+      st.className = 'status done';
+      st.innerHTML = (m.actif ? '✅ Vérification active' : '⏸️ Clé enregistrée mais désactivée')
+        + (m.credits != null ? ` · <b>${m.credits}</b> crédits restants` : '');
+    }
+  } catch { /* endpoint absent (vieux serveur) : on n'affiche rien */ }
 }
 
 async function updateWuInfo() {
@@ -1001,6 +1021,25 @@ $('#btn-save-settings').addEventListener('click', async () => {
   await saveSettings();
   updateWuInfo();
   toast('Réglages enregistrés', 'ok');
+});
+
+$('#btn-mv-save').addEventListener('click', async () => {
+  const key = $('#mv-key').value.trim();
+  const body = { actif: $('#mv-actif').checked };
+  if (key) body.apiKey = key; // clé vide = on garde celle déjà enregistrée
+  setStatus('#mv-status', '<span class="spinner"></span>Vérification de la clé…', 'working');
+  const r = await api('/millionverifier', 'POST', body);
+  if (r.aUneClef && r.cleValide) {
+    setStatus('#mv-status',
+      `✅ Clé valide${r.actif ? ' et <b>active</b>' : ' (désactivée)'}` +
+      (r.credits != null ? ` · <b>${r.credits}</b> crédits restants` : ''), 'done');
+    $('#mv-key').value = ''; // on n'affiche jamais la clé
+    toast('Clé MillionVerifier enregistrée', 'ok');
+  } else if (r.aUneClef) {
+    setStatus('#mv-status', '⚠️ Clé enregistrée, mais le test a échoué (clé invalide ou API injoignable). Vérifie la clé.', 'error');
+  } else {
+    setStatus('#mv-status', 'Aucune clé enregistrée.', '');
+  }
 });
 
 $('#btn-test-smtp').addEventListener('click', async () => {

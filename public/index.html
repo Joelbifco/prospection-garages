@@ -407,6 +407,17 @@
         </label>
         <div id="google-status" class="status"></div>
         <hr />
+        <h2 style="font-size:16px">🛡️ Vérification des adresses (MillionVerifier)</h2>
+        <p class="hint">Teste chaque adresse <b>avant l'envoi</b> et écarte les boîtes mortes que le test habituel ne voit pas (vieux gmail/hotmail). Ça fait <b>tomber les rebonds</b> et laisse les boîtes monter à 50/jour. Colle ta <b>clé API</b> (compte sur <code>millionverifier.com</code>). Vide = vérification désactivée, les courriels partent comme avant.</p>
+        <label>Clé API MillionVerifier
+          <input id="mv-key" type="password" placeholder="Colle ta clé API ici" />
+        </label>
+        <label class="chk-inline" style="margin-top:6px"><input type="checkbox" id="mv-actif" /> Activer la vérification</label>
+        <div class="row-btns">
+          <button id="btn-mv-save" class="primary">Enregistrer la clé</button>
+        </div>
+        <div id="mv-status" class="status"></div>
+        <hr />
         <h2 style="font-size:16px">🌡️ Mode réchauffement</h2>
         <p class="hint">Pour une adresse neuve : limite le nombre d'envois par jour et l'augmente automatiquement chaque semaine (10 → 20 → 30 → 40 → 50). Empêche que ton adresse soit classée pourriel.</p>
         <label class="chk-inline" style="margin-top:0"><input type="checkbox" id="wu-enabled" /> Activer le réchauffement automatique</label>
