@@ -1056,6 +1056,7 @@ async function searchGaragesOSM(zone, opts = {}) {
 // facture ~0,032 $ US par recherche, mais le coût réel n'apparaît qu'après ~24h).
 // Réinitialisable via l'API pour suivre le coût d'un ratissage précis.
 let googleSearchCount = 0;
+let harvestUrgent = false; // campagne en manque critique → Google au-delà de la part du jour (jusqu'au plafond MENSUEL)
 
 // ---------------------------------------------------------------------------
 //  PLAFOND GOOGLE (oct. 2026). Le masque de champs demande site web + téléphone :
@@ -1096,8 +1097,12 @@ function googleUsage() {
   if (u.jour !== todayStr()) { u.jour = todayStr(); u.jourTotal = 0; }
   const joursDuMois = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const partJour = Math.ceil(plafondMensuel / (joursRemplissage || joursDuMois));
-  const restant = Math.max(0, Math.min(plafondMensuel - u.total, partJour - u.jourTotal));
-  return { u, plafondMensuel, joursRemplissage, partJour, restant };
+  // Mode URGENCE : une campagne à court de contacts peut dépenser Google AU-DELÀ
+  // de la part du jour (jusqu'au plafond MENSUEL), pour se refaire une réserve.
+  // Hors urgence (affichage des coûts, etc.), comportement inchangé.
+  const dispoJour = harvestUrgent ? (plafondMensuel - u.total) : (partJour - u.jourTotal);
+  const restant = Math.max(0, Math.min(plafondMensuel - u.total, dispoJour));
+  return { u, plafondMensuel, joursRemplissage, partJour, restant, urgence: harvestUrgent };
 }
 // Réserve UNE requête Google. Faux = plafond atteint (aucune requête envoyée).
 function googleReserver() {
@@ -1108,6 +1113,19 @@ function googleReserver() {
   try { writeFileSync(GOOGLE_USAGE_FILE, JSON.stringify(g.u)); } catch { /* compté en mémoire quand même */ }
   googleSearchCount++;
   return true;
+}
+
+// Journal d'événements notables (ratissage d'urgence, etc.) — lu par SIMA pour
+// afficher une notification. Liste roulante, hors dépôt (data/).
+const EVENEMENTS_FILE = path.join(DATA_DIR, 'evenements.json');
+function lireEvenements() {
+  try { return JSON.parse(readFileSync(EVENEMENTS_FILE, 'utf8')); } catch { return []; }
+}
+function enregistrerEvenement(type, message) {
+  let liste = lireEvenements();
+  liste.push({ at: new Date().toISOString(), type, message });
+  if (liste.length > 200) liste = liste.slice(-200);
+  try { writeFileSync(EVENEMENTS_FILE, JSON.stringify(liste)); } catch { /* réessaiera */ }
 }
 
 // Recherche via Google Places (plus complet — nécessite une clé Google)
@@ -1742,6 +1760,12 @@ async function runHarvestOnce(force = false) {
   autoBusy = true;
   try {
     const contacts = await load('contacts');
+    // URGENCE : si cette campagne est à court de contacts frais, on DÉBRIDE Google
+    // (dépense au-delà de la part du jour, jusqu'au plafond mensuel) pour la refaire.
+    const reserveFraiche = contacts.filter((c) => c.email && c.status === 'nouveau').length;
+    const seuilUrgence = Number(auto.seuilReserveUrgence) || 100;
+    const aUneCle = !!(settings.googleApiKey && String(settings.googleApiKey).trim());
+    harvestUrgent = aUneCle && reserveFraiche < seuilUrgence;
     // ACCUMULATION : chaque jour, on ratisse PLUSIEURS zones et on garde TOUS les
     // courriels trouvés (pour bâtir une grande réserve), en s'arrêtant proprement
     // si Google atteint sa limite quotidienne.
@@ -1825,6 +1849,14 @@ async function runHarvestOnce(force = false) {
         ].filter(Boolean).join(' · '),
       };
       recordDailyCount(frais, contacts.length, totalAdded); // historique sur la version fraîche
+      // Ratissage d'URGENCE déclenché : on note l'événement pour SIMA (1×/jour/campagne).
+      if (harvestUrgent && frais.auto.urgenceNotifiee !== todayStr()) {
+        frais.auto.urgenceNotifiee = todayStr();
+        const nomCamp = (CAMPAIGNS.find((x) => x.id === currentCampaign()) || {}).name || currentCampaign();
+        enregistrerEvenement('ratissage-urgence',
+          `« ${nomCamp} » à court de contacts (${reserveFraiche}) → ratissage Google boosté (+${totalAdded} ce passage).`);
+        console.log(`  🚨  [${currentCampaign()}] Réserve basse (${reserveFraiche}) → Google débridé (+${totalAdded})`);
+      }
       await save('settings', frais);
     } catch {
       recordDailyCount(settings, contacts.length, totalAdded);
@@ -1835,6 +1867,7 @@ async function runHarvestOnce(force = false) {
     return { error: e.message };
   } finally {
     autoBusy = false;
+    harvestUrgent = false; // ne jamais laisser le mode urgence « collé » entre deux passages
   }
 }
 
@@ -3045,6 +3078,14 @@ async function handleApi(req, res, url) {
         google: Math.round(googleMois),
       },
     });
+  }
+
+  // Événements notables (ratissage d'urgence, etc.) — lus par SIMA pour notifier.
+  if (p === '/api/evenements' && method === 'GET') {
+    let liste = lireEvenements();
+    const depuis = Number(url.searchParams.get('depuis')) || 0;
+    if (depuis) liste = liste.filter((e) => new Date(e.at).getTime() > depuis);
+    return sendJSON(res, 200, { evenements: liste.slice(-50) });
   }
 
   // Paliers d'envoi par boîte (montée progressive 30 → 50) et santé sur 7 jours.
