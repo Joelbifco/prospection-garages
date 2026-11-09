@@ -681,30 +681,69 @@ async function loadReplies() {
       '<p style="color:var(--muted);margin-top:16px">Aucune réponse pour le moment. Clique « Vérifier les réponses » pour lire ta boîte Gmail.</p>';
     return;
   }
-  box.innerHTML = replies
-    .map(
-      (r) => `
+  const COLS = [
+    { key: 'a-traiter', titre: 'À traiter', icone: '📥' },
+    { key: 'interesse', titre: 'Intéressés', icone: '⭐' },
+    { key: 'pas-interesse', titre: 'Pas intéressé', icone: '😐' },
+    { key: 'desabonne', titre: 'Désabonnés', icone: '🔒' },
+  ];
+  // Colonne d'affichage : le désabonnement verrouille (priorité la plus haute),
+  // puis l'intéressé (⭐), puis le refus mou, sinon « à traiter ».
+  const colonneDe = (r) =>
+    r.segment === 'desabonne' ? 'desabonne'
+      : r.interesse ? 'interesse'
+      : r.segment === 'pas-interesse' ? 'pas-interesse'
+      : 'a-traiter';
+
+  const parColonne = { 'a-traiter': [], interesse: [], 'pas-interesse': [], desabonne: [] };
+  for (const r of replies) parColonne[colonneDe(r)].push(r);
+
+  // Boutons « classer » : on bascule l'état de SEGMENT (l'« Intéressé » se gère
+  // par le bouton ⭐ existant). On n'affiche pas le bouton de l'état courant.
+  const MOVES = [
+    { key: 'a-traiter', label: '↩ À traiter' },
+    { key: 'pas-interesse', label: '😐 Pas intéressé' },
+    { key: 'desabonne', label: '🔒 Désabonné' },
+  ];
+
+  const carte = (r) => {
+    const verrou = r.segment === 'desabonne';
+    const segActuel = r.segment || 'a-traiter';
+    return `
     <div class="reply-card ${r.repondu ? 'rc-repondu' : 'rc-attente'}" data-id="${esc(r.contactId)}">
       <div class="rc-head">
         <div>
           <span class="rc-badge">${r.repondu ? '✅ Répondu' : '✉️ À répondre'}</span>
-          <span class="rc-name">${esc(r.name) || esc(r.from)}</span> <span class="rc-from">&lt;${esc(r.from)}&gt;</span>
+          <span class="rc-name">${esc(r.name) || esc(r.from)}</span>
         </div>
-        <span class="rc-date">${new Date(r.date).toLocaleString('fr-CA', { dateStyle: 'medium', timeStyle: 'short' })}</span>
+        <span class="rc-date">${new Date(r.date).toLocaleString('fr-CA', { dateStyle: 'short', timeStyle: 'short' })}</span>
       </div>
+      <div class="rc-from">&lt;${esc(r.from)}&gt;</div>
       ${r.subject ? `<div class="rc-subject">${esc(r.subject)}</div>` : ''}
       <div class="rc-text">${esc(r.text) || '(message sans texte)'}</div>
-      <textarea class="rc-reply" rows="4" placeholder="Écris ta réponse à ${esc(r.name) || 'ce garage'}…"></textarea>
+      ${verrou
+        ? `<div class="rc-verrou">🔒 Désabonné — on ne le recontacte plus par courriel. (Gardé dans la liste.)</div>`
+        : `<textarea class="rc-reply" rows="3" placeholder="Réponse à ${esc(r.name) || 'ce garage'}…"></textarea>`}
       <div class="rc-actions">
-        <button class="primary rc-send" data-id="${esc(r.contactId)}">📧 Répondre</button>
-        ${r.contactId ? `<button class="rc-voir" data-id="${esc(r.contactId)}">📄 Voir la conversation</button>` : ''}
+        ${verrou ? '' : `<button class="primary rc-send" data-id="${esc(r.contactId)}">📧 Répondre</button>`}
+        ${r.contactId ? `<button class="rc-voir" data-id="${esc(r.contactId)}">📄 Conversation</button>` : ''}
         ${r.contactId ? `<span class="res-btns">${boutonsResultat({ id: r.contactId, interesse: r.interesse, soumission: r.soumission, ventes: r.ventes })}</span>` : ''}
         <span class="rc-sent" style="color:var(--ok);font-size:13px"></span>
       </div>
+      ${r.contactId ? `<div class="rc-move"><span class="rc-move-l">Classer :</span>${
+        MOVES.filter((m) => m.key !== segActuel).map((m) => `<button class="rc-move-btn" data-move="${m.key}" data-id="${esc(r.contactId)}">${m.label}</button>`).join('')
+      }</div>` : ''}
       <div class="rc-sent-email" style="display:none"></div>
-    </div>`
-    )
-    .join('');
+    </div>`;
+  };
+
+  box.innerHTML = `<div class="rep-board">` + COLS.map((c) => {
+    const liste = parColonne[c.key];
+    return `<section class="rep-col rep-col-${c.key}">
+      <header class="rep-col-head"><span>${c.icone} ${c.titre}</span><span class="rep-col-n">${liste.length}</span></header>
+      <div class="rep-col-body">${liste.length ? liste.map(carte).join('') : '<p class="rep-vide">—</p>'}</div>
+    </section>`;
+  }).join('') + `</div>`;
 
   $$('.rc-send').forEach((btn) =>
     btn.addEventListener('click', async () => {
@@ -732,6 +771,22 @@ async function loadReplies() {
   );
 
   brancherBoutonsResultat(box, loadReplies);
+
+  // Classer une carte dans une autre liste (segment). L'« Intéressé » (⭐) passe
+  // par le bouton étoile, qui recharge déjà la vue.
+  $$('.rc-move-btn').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const r = await api('/replies/segment', 'POST', { contactId: btn.dataset.id, segment: btn.dataset.move });
+        if (r && r.error) throw new Error(r.error);
+        await loadReplies();
+      } catch (e) {
+        toast('Erreur : ' + e.message, 'err');
+        btn.disabled = false;
+      }
+    })
+  );
 
   // « Voir mon courriel envoyé » : affiche/masque le(s) courriel(s) d'origine.
   $$('.rc-voir').forEach((btn) =>

@@ -201,7 +201,40 @@ a:hover { text-decoration: underline; }
 .reply-card .rc-subject { font-size: 13px; color: var(--accent); margin-bottom: 6px; }
 .reply-card .rc-text { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-size: 14px; max-height: 220px; overflow: auto; }
 .reply-card textarea { margin-top: 10px; }
-.reply-card .rc-actions { display: flex; gap: 10px; margin-top: 8px; align-items: center; }
+.reply-card .rc-actions { display: flex; gap: 10px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+
+/* ===== Réponses en colonnes (À traiter / Intéressés / Pas intéressé / Désabonnés) ===== */
+.rep-board { display: flex; gap: 14px; margin-top: 16px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
+.rep-col { flex: 1 1 0; min-width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; max-height: 78vh; }
+.rep-col-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 14px; font-weight: 700; font-size: 14px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); border-radius: 12px 12px 0 0; }
+.rep-col-n { background: var(--bg); color: var(--muted); border-radius: 999px; padding: 1px 9px; font-size: 12px; font-weight: 700; }
+.rep-col-body { padding: 4px 12px 12px; overflow-y: auto; }
+/* Accents de couleur par colonne (barre du haut) */
+.rep-col-a-traiter .rep-col-head { color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+.rep-col-interesse .rep-col-head { color: #f5c451; box-shadow: inset 0 3px 0 #f5c451; }
+.rep-col-pas-interesse .rep-col-head { color: var(--muted); box-shadow: inset 0 3px 0 var(--muted); }
+.rep-col-desabonne .rep-col-head { color: var(--danger); box-shadow: inset 0 3px 0 var(--danger); }
+.rep-col .reply-card { margin-top: 12px; padding: 12px; }
+.rep-col .reply-card:first-child { margin-top: 10px; }
+.rep-vide { color: var(--muted); text-align: center; padding: 22px 0; margin: 0; }
+.rc-verrou { background: rgba(240,90,90,.10); border: 1px solid var(--danger); color: var(--danger); border-radius: 8px; padding: 10px; font-size: 13px; margin-top: 10px; }
+.rc-move { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.rc-move-l { color: var(--muted); font-size: 12px; font-weight: 600; }
+.rc-move-btn { background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.rc-move-btn:hover { border-color: var(--accent); }
+
+/* L'onglet Réponses sort du conteneur central (1200px) et prend toute la
+   largeur de l'écran — le tableau a besoin de respirer. Les autres onglets
+   gardent leur colonne centrée. */
+#tab-reponses .card {
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  padding-left: 24px;
+  padding-right: 24px;
+}
 
 .two { display: flex; gap: 12px; align-items: center; }
 .two > label { flex: 1; }

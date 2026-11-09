@@ -1608,7 +1608,9 @@ async function runSendOnce(force = false) {
     remaining = Math.min(remaining, Math.max(0, palierBoite(boite) - parAutres - countSentToday(sends)));
   }
 
-  const isNew = (c) => c.email && c.status === 'nouveau';
+  // Jamais aux désabonnés : un contact « desabonne » est verrouillé en envoi,
+  // même s'il est encore « nouveau » ou re-ratissé plus tard (demande de Joel, 9 nov 2026).
+  const isNew = (c) => c.email && c.status === 'nouveau' && c.segment !== 'desabonne';
   const targets = contacts.filter(isNew).slice(0, Math.max(0, remaining));
   let results = [];
   let fatal = '';
@@ -1956,11 +1958,19 @@ async function checkReplies() {
   let bounceHits = 0;
   const interesting = []; // réponses qui ne sont PAS un refus → à signaler
 
-  // Un refus clair (sinon on considère la réponse comme une piste)
-  const isRejection = (t) =>
-    /non merci|pas int[ée]ress|aucun int[ée]r[êe]t|d[ée]sabonn|retir[ez]|cessez|arr[êe]tez|ne .{0,25}int[ée]resse pas|not interested|no,? thank|unsubscribe/i.test(
-      t || ''
-    );
+  // Deux sortes de « non » (demande de Joel, 9 nov 2026), parce qu'elles n'ont
+  // PAS les mêmes droits :
+  //  - REFUS FERME (désabonnement) : la personne retire son consentement. On ne
+  //    lui réécrit JAMAIS — ni relance, ni autre offre (loi C-28/CASL + la
+  //    réputation des boîtes d'envoi en dépend). → segment « desabonne ».
+  //  - REFUS MOU (« non merci, pas intéressé ») : un non du moment. On le garde,
+  //    on lui répond poliment, et on pourra le relancer en douceur plus tard. → « pas-interesse ».
+  const isHardOptOut = (t) =>
+    /d[ée]sabonn|retir[ez]-?(moi|nous)|retirez[- ]mon|ne plus .{0,20}(écrire|contacter|courriel|mail|message)|cessez|arr[êe]tez de|unsubscribe|opt[- ]?out|remove me|stop/i.test(t || '');
+  const isSoftNo = (t) =>
+    /non,? merci|pas int[ée]ress|aucun int[ée]r[êe]t|ne .{0,25}int[ée]resse pas|not interested|no,? thank/i.test(t || '');
+  // Un refus (dur OU mou) n'est pas une piste à signaler.
+  const isRejection = (t) => isHardOptOut(t) || isSoftNo(t);
 
   const isBounce = (from, subject) => {
     const f = (from || '').toLowerCase();
@@ -2052,7 +2062,13 @@ async function checkReplies() {
         // contact (il pourra donc être relancé normalement).
         if (!auto && !isRejection(text)) interesting.push({ ...rec, phone: m.contact.phone || '' });
         const idx = contacts.findIndex((c) => c.id === m.contact.id);
-        if (idx >= 0 && contacts[idx].status !== 'partenaire' && !auto) contacts[idx].status = 'répondu';
+        if (idx >= 0 && contacts[idx].status !== 'partenaire' && !auto) {
+          contacts[idx].status = 'répondu';
+          // Classement en liste (segment). Le désabonnement l'emporte et se
+          // VERROUILLE : on ne le rétrograde jamais à « pas-interesse ».
+          if (isHardOptOut(text)) contacts[idx].segment = 'desabonne';
+          else if (isSoftNo(text) && contacts[idx].segment !== 'desabonne') contacts[idx].segment = 'pas-interesse';
+        }
       }
       // Rebonds (mauvaises adresses) → marquer le garage « invalide »
       for (const bc of bounceCandidates) {
@@ -3546,10 +3562,27 @@ async function handleApi(req, res, url) {
           (s) => s.contactId === r.contactId && new Date(s.at) >= new Date(r.date)
         );
         const c = parId.get(r.contactId) || {};
-        return { ...r, repondu, interesse: c.interesse || null, soumission: c.soumission || null, ventes: ventesPar.get(r.contactId) || [] };
+        return { ...r, repondu, interesse: c.interesse || null, soumission: c.soumission || null, segment: c.segment || null, ventes: ventesPar.get(r.contactId) || [] };
       })
       .sort((a, b) => new Date(b.date) - new Date(a.date));
     return sendJSON(res, 200, sorted);
+  }
+  // Déplacer un contact d'une liste à l'autre à la main (demande de Joel, 9 nov 2026).
+  // Segments : 'a-traiter' (remis dans la colonne centrale), 'pas-interesse', 'desabonne'.
+  // L'« intéressé » se gère par le bouton ⭐ (c.interesse), pas ici.
+  if (p === '/api/replies/segment' && method === 'POST') {
+    const body = await readBody(req);
+    const valides = ['a-traiter', 'pas-interesse', 'desabonne'];
+    const seg = body.segment === null || body.segment === '' ? null : body.segment;
+    if (seg !== null && !valides.includes(seg)) return sendJSON(res, 400, { error: 'segment inconnu' });
+    const contacts = await load('contacts');
+    const idx = contacts.findIndex((c) => c.id === body.contactId);
+    if (idx < 0) return sendJSON(res, 404, { error: 'contact introuvable' });
+    // 'a-traiter' = pas de segment (on l'enlève). Sinon on pose le segment.
+    if (seg === null || seg === 'a-traiter') delete contacts[idx].segment;
+    else contacts[idx].segment = seg;
+    await save('contacts', contacts);
+    return sendJSON(res, 200, { ok: true, segment: contacts[idx].segment || null });
   }
   // Fil de conversation complet avec un contact — pour le bouton « voir le
   // courriel envoyé / la chaîne ». Fusionne les courriels ENVOYÉS (sujet stocké,
