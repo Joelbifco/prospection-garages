@@ -1936,10 +1936,33 @@ function buildFunnel(contacts, sends) {
 //   - REFUS MOU (« non merci, pas intéressé ») : un non du moment. On le garde,
 //     on lui répond poliment, et on pourra le relancer en douceur plus tard. → « pas-interesse ».
 //  Au niveau module : utilisés par checkReplies ET par le reclassement initial.
+// On n'analyse QUE les mots de la personne, pas le fil cité en dessous : notre
+// propre courriel (avec son pied « pour vous désabonner… ») s'y retrouve sinon
+// et ferait passer presque tout le monde pour un désabonnement (bug du 9 nov :
+// 201 faux désabonnés). premierBout coupe au début de la citation.
+function premierBout(texte) {
+  const t = String(texte || '');
+  const seps = [
+    /\n\s*>/,                          // lignes citées « > »
+    /\nLe\s.{0,80}a\s+écrit\s*:/i,     // « Le … a écrit : »
+    /\nOn\s.{0,80}\swrote\s*:/i,       // « On … wrote: »
+    /\n-{2,}\s*Original Message\s*-{2,}/i,
+    /\n\s*De\s*:/,                     // en-tête cité « De : »
+    /\n\s*From\s*:/i,
+    /\n\s*Envoyé\s*:/i,
+    /\n_{5,}/,                         // ligne de soulignés Outlook
+  ];
+  let coupe = t.length;
+  for (const re of seps) { const m = t.match(re); if (m && m.index < coupe) coupe = m.index; }
+  return t.slice(0, coupe);
+}
+// REFUS FERME (désabonnement) : opt-out explicite → verrouillé. Tokens stricts
+// (pas de « stop » nu, trop courant) pour éviter les faux positifs.
 const isHardOptOut = (t) =>
-  /d[ée]sabonn|retir[ez]-?(moi|nous)|retirez[- ]mon|ne plus .{0,20}(écrire|contacter|courriel|mail|message)|cessez|arr[êe]tez de|unsubscribe|opt[- ]?out|remove me|stop/i.test(t || '');
+  /d[ée]sabonn|retir[ez].{0,12}(moi|nous|mon courriel|mon adresse|de (votre|la) liste)|ne plus .{0,25}(écrire|contacter|recevoir|courriel|mail|message)|unsubscribe|opt[- ]?out|remove me from/i.test(premierBout(t));
+// REFUS MOU (« non merci, pas intéressé ») : relançable plus tard.
 const isSoftNo = (t) =>
-  /non,? merci|pas int[ée]ress|aucun int[ée]r[êe]t|ne .{0,25}int[ée]resse pas|not interested|no,? thank/i.test(t || '');
+  /non,? merci|pas int[ée]ress|aucun int[ée]r[êe]t|ne .{0,25}int[ée]resse pas|not interested|no,? thank/i.test(premierBout(t));
 // Un refus (dur OU mou) n'est pas une piste à signaler.
 const isRejection = (t) => isHardOptOut(t) || isSoftNo(t);
 
@@ -1949,24 +1972,36 @@ const isRejection = (t) => isHardOptOut(t) || isSoftNo(t);
 // campagnes. Idempotent : ne rétrograde jamais un désabonné, ne touche qu'aux
 // contacts sans segment pour le refus mou.
 async function reclasserSegmentsV1() {
-  const marqueur = path.join(DATA_DIR, 'reclassement-segments-v1.done');
+  // v2 : AUTORITAIRE — recalcule le segment depuis les vrais mots de la personne
+  // (premierBout) et corrige les faux « desabonne » du premier passage buggé.
+  const marqueur = path.join(DATA_DIR, 'reclassement-segments-v2.done');
   if (existsSync(marqueur)) return;
-  const bilan = { pasInteresse: 0, desabonne: 0 };
+  const bilan = { pasInteresse: 0, desabonne: 0, corrige: 0 };
   for (const camp of CAMPAIGNS) {
     try {
       await campaignCtx.run(camp.id, async () => {
         const [replies, contacts] = await Promise.all([load('replies'), load('contacts')]);
-        if (!replies.length || !contacts.length) return;
-        const parId = new Map(contacts.map((c) => [c.id, c]));
-        let change = false;
+        if (!contacts.length) return;
+        const parContact = new Map();
         for (const r of replies) {
-          const c = parId.get(r.contactId);
-          if (!c) continue;
-          const t = r.text || '';
-          if (isHardOptOut(t)) {
-            if (c.segment !== 'desabonne') { c.segment = 'desabonne'; bilan.desabonne++; change = true; }
-          } else if (isSoftNo(t) && !c.segment) {
-            c.segment = 'pas-interesse'; bilan.pasInteresse++; change = true;
+          if (!r.contactId) continue;
+          if (!parContact.has(r.contactId)) parContact.set(r.contactId, []);
+          parContact.get(r.contactId).push(r);
+        }
+        let change = false;
+        for (const c of contacts) {
+          const rs = parContact.get(c.id);
+          if (!rs) continue; // pas de réponse → on ne touche à rien
+          let voulu = null;
+          if (rs.some((r) => isHardOptOut(r.text))) voulu = 'desabonne';
+          else if (rs.some((r) => isSoftNo(r.text))) voulu = 'pas-interesse';
+          const actuel = c.segment || null;
+          if (actuel !== voulu) {
+            if (actuel === 'desabonne' && voulu !== 'desabonne') bilan.corrige++;
+            if (voulu) c.segment = voulu; else delete c.segment;
+            change = true;
+            if (voulu === 'desabonne') bilan.desabonne++;
+            if (voulu === 'pas-interesse') bilan.pasInteresse++;
           }
         }
         if (change) await save('contacts', contacts);
@@ -1976,7 +2011,7 @@ async function reclasserSegmentsV1() {
     }
   }
   try { await writeFile(marqueur, new Date().toISOString(), 'utf8'); } catch {}
-  console.log(`  🗂️  Reclassement des anciennes réponses : ${bilan.pasInteresse} « pas intéressé », ${bilan.desabonne} désabonné(s).`);
+  console.log(`  🗂️  Reclassement v2 : ${bilan.desabonne} désabonné(s), ${bilan.pasInteresse} « pas intéressé », ${bilan.corrige} faux désabonnés corrigés.`);
 }
 
 // ---------------------------------------------------------------------------
