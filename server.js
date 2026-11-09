@@ -1928,6 +1928,58 @@ function buildFunnel(contacts, sends) {
 }
 
 // ---------------------------------------------------------------------------
+//  Classement des réponses : deux sortes de « non » (demande de Joel, 9 nov 2026),
+//  parce qu'elles n'ont PAS les mêmes droits :
+//   - REFUS FERME (désabonnement) : la personne retire son consentement. On ne
+//     lui réécrit JAMAIS — ni relance, ni autre offre (loi C-28/CASL + la
+//     réputation des boîtes d'envoi en dépend). → segment « desabonne » (verrouillé).
+//   - REFUS MOU (« non merci, pas intéressé ») : un non du moment. On le garde,
+//     on lui répond poliment, et on pourra le relancer en douceur plus tard. → « pas-interesse ».
+//  Au niveau module : utilisés par checkReplies ET par le reclassement initial.
+const isHardOptOut = (t) =>
+  /d[ée]sabonn|retir[ez]-?(moi|nous)|retirez[- ]mon|ne plus .{0,20}(écrire|contacter|courriel|mail|message)|cessez|arr[êe]tez de|unsubscribe|opt[- ]?out|remove me|stop/i.test(t || '');
+const isSoftNo = (t) =>
+  /non,? merci|pas int[ée]ress|aucun int[ée]r[êe]t|ne .{0,25}int[ée]resse pas|not interested|no,? thank/i.test(t || '');
+// Un refus (dur OU mou) n'est pas une piste à signaler.
+const isRejection = (t) => isHardOptOut(t) || isSoftNo(t);
+
+// Reclassement UNIQUE des réponses déjà reçues (demande de Joel, 9 nov 2026) :
+// les « non merci » / désabonnements lus AVANT l'ajout du classement n'avaient pas
+// de segment. On les range une seule fois (marqueur-fichier), sur TOUTES les
+// campagnes. Idempotent : ne rétrograde jamais un désabonné, ne touche qu'aux
+// contacts sans segment pour le refus mou.
+async function reclasserSegmentsV1() {
+  const marqueur = path.join(DATA_DIR, 'reclassement-segments-v1.done');
+  if (existsSync(marqueur)) return;
+  const bilan = { pasInteresse: 0, desabonne: 0 };
+  for (const camp of CAMPAIGNS) {
+    try {
+      await campaignCtx.run(camp.id, async () => {
+        const [replies, contacts] = await Promise.all([load('replies'), load('contacts')]);
+        if (!replies.length || !contacts.length) return;
+        const parId = new Map(contacts.map((c) => [c.id, c]));
+        let change = false;
+        for (const r of replies) {
+          const c = parId.get(r.contactId);
+          if (!c) continue;
+          const t = r.text || '';
+          if (isHardOptOut(t)) {
+            if (c.segment !== 'desabonne') { c.segment = 'desabonne'; bilan.desabonne++; change = true; }
+          } else if (isSoftNo(t) && !c.segment) {
+            c.segment = 'pas-interesse'; bilan.pasInteresse++; change = true;
+          }
+        }
+        if (change) await save('contacts', contacts);
+      });
+    } catch (e) {
+      console.error(`  ⚠  Reclassement ${camp.id} : ${e.message}`);
+    }
+  }
+  try { await writeFile(marqueur, new Date().toISOString(), 'utf8'); } catch {}
+  console.log(`  🗂️  Reclassement des anciennes réponses : ${bilan.pasInteresse} « pas intéressé », ${bilan.desabonne} désabonné(s).`);
+}
+
+// ---------------------------------------------------------------------------
 //  Réponses : lire la boîte Gmail (IMAP) et repérer les garages qui ont répondu
 // ---------------------------------------------------------------------------
 async function checkReplies() {
@@ -1958,19 +2010,7 @@ async function checkReplies() {
   let bounceHits = 0;
   const interesting = []; // réponses qui ne sont PAS un refus → à signaler
 
-  // Deux sortes de « non » (demande de Joel, 9 nov 2026), parce qu'elles n'ont
-  // PAS les mêmes droits :
-  //  - REFUS FERME (désabonnement) : la personne retire son consentement. On ne
-  //    lui réécrit JAMAIS — ni relance, ni autre offre (loi C-28/CASL + la
-  //    réputation des boîtes d'envoi en dépend). → segment « desabonne ».
-  //  - REFUS MOU (« non merci, pas intéressé ») : un non du moment. On le garde,
-  //    on lui répond poliment, et on pourra le relancer en douceur plus tard. → « pas-interesse ».
-  const isHardOptOut = (t) =>
-    /d[ée]sabonn|retir[ez]-?(moi|nous)|retirez[- ]mon|ne plus .{0,20}(écrire|contacter|courriel|mail|message)|cessez|arr[êe]tez de|unsubscribe|opt[- ]?out|remove me|stop/i.test(t || '');
-  const isSoftNo = (t) =>
-    /non,? merci|pas int[ée]ress|aucun int[ée]r[êe]t|ne .{0,25}int[ée]resse pas|not interested|no,? thank/i.test(t || '');
-  // Un refus (dur OU mou) n'est pas une piste à signaler.
-  const isRejection = (t) => isHardOptOut(t) || isSoftNo(t);
+  // isHardOptOut / isSoftNo / isRejection : définis au niveau module (voir plus haut).
 
   const isBounce = (from, subject) => {
     const f = (from || '').toLowerCase();
@@ -3714,6 +3754,11 @@ server.listen(PORT, () => {
   console.log('');
   console.log('  (Laisse cette fenêtre ouverte pendant que tu utilises l\'app.)');
 });
+
+// Reclassement UNIQUE des anciennes réponses (demande de Joel, 9 nov 2026) :
+// range les « non merci » / désabonnements déjà reçus dans les bonnes colonnes.
+// Une seule fois (marqueur-fichier), non bloquant pour le démarrage.
+setTimeout(() => reclasserSegmentsV1().catch((e) => console.error('  ⚠  Reclassement :', e.message)), 8000);
 
 // Exécute une tâche pour CHAQUE campagne, chacune dans son propre contexte.
 function forEachCampaign(fn) {
