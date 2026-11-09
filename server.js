@@ -14,6 +14,7 @@ import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import dnsMod, { promises as dns } from 'node:dns';
 import https from 'node:https';
+import { demarrerMiseAJourAuto } from './mise-a-jour-auto.js';
 
 // Le serveur (DigitalOcean) n'a PAS de route IPv6. Or smtp.hostinger.com /
 // imap.hostinger.com répondent parfois en IPv6 (via Cloudflare) : Node essaie
@@ -3894,6 +3895,11 @@ async function autoTick() {
 }
 setTimeout(autoTick, 10000);
 setInterval(autoTick, 15 * 60 * 1000);
+
+// Mise à jour automatique depuis GitHub, toutes les heures (demande de Joel,
+// 9 nov 2026). Prudente : fast-forward seulement, données jamais touchées, et
+// JAMAIS pendant un lot d'envoi/ratissage (verrou tickBusy). Voir mise-a-jour-auto.js.
+demarrerMiseAJourAuto({ envoiEnCours: () => tickBusy });
 
 // Vérifie automatiquement les réponses reçues (au démarrage puis toutes les 30 min), par campagne
 setTimeout(() => {
