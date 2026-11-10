@@ -361,3 +361,12 @@ hr { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
 .res-btn:hover { opacity: .85; }
 .res-btn.on { opacity: 1; border-color: var(--ok, #4ade80); background: rgba(74,222,128,.12); }
 #res-tiles .stat .n { font-size: 24px; }
+
+/* Bloc « S'abonner dans Google Agenda » (onglet À rappeler) */
+.cal-bloc { }
+.cal-bloc summary { cursor: pointer; font-weight: 600; }
+.cal-hint { color: var(--muted); font-weight: 400; font-size: 13px; }
+.cal-etapes { margin: 10px 0 0; padding-left: 20px; line-height: 1.7; }
+.cal-etapes li { margin-bottom: 6px; }
+.cal-url-ligne { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.cal-url { flex: 1 1 320px; min-width: 240px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 7px 10px; font-size: 12px; font-family: monospace; }

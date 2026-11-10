@@ -2112,6 +2112,33 @@ async function rattrapageLeadsV1() {
   console.log(`  📞  Rattrapage leads : ${total} garage(s) versé(s) dans « À rappeler ».`);
 }
 
+// Tous les leads « à rappeler » (pas encore rappelés), toutes campagnes confondues.
+// Partagé par /api/leads/tous (SIMA), le flux calendrier .ics et /rappels.json.
+async function tousLesLeads() {
+  const out = [];
+  for (const c of CAMPAIGNS) {
+    const ls = await campaignCtx.run(c.id, async () => {
+      const contacts = await load('contacts');
+      return contacts
+        .filter((x) => x.aRappeler && !x.rappelFait)
+        .map((x) => ({
+          campagne: c.id,
+          campagneNom: c.name,
+          contactId: x.id,
+          name: x.name || '',
+          email: x.email || '',
+          tel: x.aRappeler.tel,
+          sujet: x.aRappeler.sujet || '',
+          depuis: x.aRappeler.depuis || null,
+          zone: x.zone || x.city || '',
+        }));
+    });
+    out.push(...ls);
+  }
+  out.sort((a, b) => new Date(a.depuis || 0) - new Date(b.depuis || 0));
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 //  Réponses : lire la boîte Gmail (IMAP) et repérer les garages qui ont répondu
 // ---------------------------------------------------------------------------
@@ -2818,6 +2845,58 @@ function resultatsConfig() {
   if (change) ecrireJson(RESULTATS_CONFIG_FILE, c);
   return c;
 }
+// Jeton du calendrier d'abonnement (.ics) : secret dans l'URL, car Google Agenda
+// ne peut pas envoyer d'en-tête quand il s'abonne. Généré une fois, hors dépôt.
+const CALENDRIER_CONFIG_FILE = path.join(DATA_DIR, 'calendrier-config.json');
+function calendrierConfig() {
+  const c = lireJson(CALENDRIER_CONFIG_FILE, {});
+  if (!c.jeton) {
+    c.jeton = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
+    ecrireJson(CALENDRIER_CONFIG_FILE, c);
+  }
+  return c;
+}
+// Date du jour en AAAAMMJJ dans le fuseau du Québec (peu importe le fuseau du serveur).
+function jourQuebec(d = new Date()) {
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(d).reduce((o, x) => (o[x.type] = x.value, o), {});
+  return `${p.year}${p.month}${p.day}`;
+}
+// (icsEscape est déjà défini plus haut — échappe , ; \ et les sauts de ligne.)
+// Construit le calendrier .ics : UN rappel tout-la-journée aujourd'hui qui liste
+// les garages à rappeler (choix de Joel : « un rappel par jour »).
+function construireICS(leads) {
+  const jour = jourQuebec();
+  const dj = new Date(Date.UTC(+jour.slice(0, 4), +jour.slice(4, 6) - 1, +jour.slice(6, 8)));
+  const demain = new Date(dj.getTime() + 86400000);
+  const ymd = (x) => `${x.getUTCFullYear()}${String(x.getUTCMonth() + 1).padStart(2, '0')}${String(x.getUTCDate()).padStart(2, '0')}`;
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Bifco//Prospection//FR',
+    'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Garages à rappeler — Bifco',
+    'X-WR-TIMEZONE:America/Toronto', 'REFRESH-INTERVAL;VALUE=DURATION:PT1H', 'X-PUBLISHED-TTL:PT1H'];
+  if (leads.length) {
+    const lignes = leads.map((l) => {
+      const nom = l.name || l.email || 'Garage';
+      const zone = l.zone ? ` (${l.zone})` : '';
+      const camp = l.campagneNom ? ` — ${l.campagneNom}` : '';
+      return `• ${nom}${zone} : ${l.tel}${camp}`;
+    });
+    const desc = `${leads.length} garage(s) intéressé(s) à rappeler aujourd'hui :\n\n${lignes.join('\n')}\n\nOuvre l'app prospection → onglet « 📞 À rappeler » pour cocher au fur et à mesure.`;
+    L.push('BEGIN:VEVENT', `UID:rappels-${jour}@bifco.prospection`, `DTSTAMP:${stamp}`,
+      `DTSTART;VALUE=DATE:${ymd(dj)}`, `DTEND;VALUE=DATE:${ymd(demain)}`,
+      `SUMMARY:📞 ${leads.length} garage(s) à rappeler`, `DESCRIPTION:${icsEscape(desc)}`,
+      'TRANSP:TRANSPARENT', 'END:VEVENT');
+  }
+  L.push('END:VCALENDAR');
+  // Pliage des lignes à 75 octets, comme l'exige la norme iCalendar.
+  return L.map((ligne) => {
+    if (ligne.length <= 75) return ligne;
+    let out = ligne.slice(0, 75), reste = ligne.slice(75);
+    while (reste.length) { out += '\r\n ' + reste.slice(0, 74); reste = reste.slice(74); }
+    return out;
+  }).join('\r\n') + '\r\n';
+}
 const extraireCourriels = (t) =>
   [...new Set((String(t || '').toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g) || []))];
 // Montant lu dans du texte libre (« 2000$ cash », « 2500 plus livraison »,
@@ -3018,27 +3097,7 @@ async function handleApi(req, res, url) {
   // --- Leads « À rappeler » de TOUTES les campagnes (consommé par SIMA) ---
   // SIMA lit ça et en fait des notifications « Rappeler [garage] au [numéro] ».
   if (p === '/api/leads/tous' && method === 'GET') {
-    const out = [];
-    for (const c of CAMPAIGNS) {
-      const ls = await campaignCtx.run(c.id, async () => {
-        const contacts = await load('contacts');
-        return contacts
-          .filter((x) => x.aRappeler && !x.rappelFait)
-          .map((x) => ({
-            campagne: c.id,
-            campagneNom: c.name,
-            contactId: x.id,
-            name: x.name || '',
-            email: x.email || '',
-            tel: x.aRappeler.tel,
-            sujet: x.aRappeler.sujet || '',
-            depuis: x.aRappeler.depuis || null,
-            zone: x.zone || x.city || '',
-          }));
-      });
-      out.push(...ls);
-    }
-    out.sort((a, b) => new Date(a.depuis || 0) - new Date(b.depuis || 0));
+    const out = await tousLesLeads();
     return sendJSON(res, 200, { at: new Date().toISOString(), leads: out });
   }
 
@@ -3903,6 +3962,15 @@ async function handleApi(req, res, url) {
     await save('settings', settings);
     return sendJSON(res, 200, { ok: true, actif: settings.auto.demandeNumeroActif });
   }
+  // Adresse d'abonnement au calendrier des rappels (pour Google Agenda). Derrière
+  // la connexion : le jeton ne sort jamais, c'est Joel qui copie son URL dans l'app.
+  if (p === '/api/calendrier/url' && method === 'GET') {
+    const conf = calendrierConfig();
+    const proto = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim()
+      || (req.socket && req.socket.encrypted ? 'https' : 'http');
+    const host = req.headers['x-forwarded-host'] || req.headers.host || ('localhost:' + PORT);
+    return sendJSON(res, 200, { url: `${proto}://${host}/rappels.ics?jeton=${conf.jeton}` });
+  }
   // Fil de conversation complet avec un contact — pour le bouton « voir le
   // courriel envoyé / la chaîne ». Fusionne les courriels ENVOYÉS (sujet stocké,
   // corps reconstitué depuis le modèle) et les réponses REÇUES, en ordre
@@ -4005,6 +4073,28 @@ const server = http.createServer(async (req, res) => {
       const hc = (req.headers['x-campaign'] || '').toString();
       const camp = CAMPAIGNS.some((x) => x.id === hc) ? hc : 'garages';
       return await campaignCtx.run(camp, () => handleApi(req, res, url));
+    }
+    // Calendrier d'abonnement des garages à rappeler (.ics) + version JSON.
+    // Protégé par un jeton dans l'URL (Google Agenda ne peut pas envoyer d'en-tête).
+    // Public (hors auth) exprès : c'est Google/les appareils de l'équipe qui lisent.
+    if (url.pathname === '/rappels.ics' || url.pathname === '/rappels.json') {
+      const conf = calendrierConfig();
+      const recu = Buffer.from(String(url.searchParams.get('jeton') || ''));
+      const attendu = Buffer.from(conf.jeton);
+      if (recu.length !== attendu.length || !timingSafeEqual(recu, attendu)) {
+        res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('Jeton invalide');
+      }
+      const leads = await tousLesLeads();
+      if (url.pathname === '/rappels.json') {
+        return sendJSON(res, 200, { at: new Date().toISOString(), leads });
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/calendar; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'Content-Disposition': 'inline; filename="rappels-bifco.ics"',
+      });
+      return res.end(construireICS(leads));
     }
     // Si l'auth est active et qu'on n'est pas connecté, on sert la page de connexion.
     // Exception : les images et styles (logo, favicon…) restent accessibles pour que

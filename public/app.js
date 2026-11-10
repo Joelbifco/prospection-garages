@@ -786,9 +786,48 @@ async function loadRappels() {
   let dataFaits = { faits: [] };
   try { dataLeads = await api('/leads'); } catch { /* pas bloquant */ }
   try { dataFaits = await api('/leads/faits'); } catch { /* pas bloquant */ }
-  box.innerHTML = renderLeadsPanneau(dataLeads, dataFaits);
+  box.innerHTML = renderLeadsPanneau(dataLeads, dataFaits) + renderCalendrierBloc();
   wireLeadsPanneau();
+  wireCalendrierBloc();
   rafraichirRappels();
+}
+
+// Bloc « S'abonner dans Google Agenda » : un seul branchement, puis Google relit
+// l'adresse tout seul et affiche un rappel par jour avec les garages à appeler.
+function renderCalendrierBloc() {
+  return `
+  <details class="cal-bloc card" style="margin-top:14px">
+    <summary>📅 Mettre les rappels dans Google Agenda <span class="cal-hint">(à faire une fois)</span></summary>
+    <p class="hint" style="margin-top:10px">Chaque jour, ton agenda affichera un rappel « 📞 X garages à rappeler » avec la liste et les numéros. Ça se met à jour tout seul.</p>
+    <ol class="cal-etapes">
+      <li>Copie ton adresse privée de calendrier :
+        <div class="cal-url-ligne">
+          <input id="cal-url" class="cal-url" readonly value="…">
+          <button id="cal-copier" class="primary" type="button">Copier</button>
+        </div>
+      </li>
+      <li>Ouvre <b>Google Agenda</b> sur ordinateur → à gauche, à côté de « Autres agendas », clique <b>+</b> → <b>À partir d'une URL</b>.</li>
+      <li>Colle l'adresse, clique <b>Ajouter un agenda</b>. C'est tout. (Google peut prendre quelques heures au premier affichage, puis c'est automatique.)</li>
+    </ol>
+    <p class="hint" style="color:var(--danger)">⚠ Cette adresse contient un code secret : ne la partage qu'avec ton équipe.</p>
+  </details>`;
+}
+
+async function wireCalendrierBloc() {
+  const champ = document.getElementById('cal-url');
+  const btn = document.getElementById('cal-copier');
+  if (!champ) return;
+  try {
+    const r = await api('/calendrier/url');
+    champ.value = r.url || '';
+  } catch { champ.value = '(ouvre l’app sur le serveur pour voir l’adresse)'; }
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      champ.select();
+      try { await navigator.clipboard.writeText(champ.value); toast('Adresse copiée', 'ok'); }
+      catch { try { document.execCommand('copy'); toast('Adresse copiée', 'ok'); } catch { toast('Copie manuelle', 'info'); } }
+    });
+  }
 }
 
 async function loadReplies() {
