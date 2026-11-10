@@ -797,8 +797,8 @@ async function loadRappels() {
 function renderCalendrierBloc() {
   return `
   <details class="cal-bloc card" style="margin-top:14px">
-    <summary>📅 Mettre les rappels dans Google Agenda <span class="cal-hint">(à faire une fois)</span></summary>
-    <p class="hint" style="margin-top:10px">Chaque jour, ton agenda affichera un rappel « 📞 X garages à rappeler » avec la liste et les numéros. Ça se met à jour tout seul.</p>
+    <summary>📅 Ajouter les rappels à un agenda perso <span class="cal-hint">(optionnel)</span></summary>
+    <p class="hint" style="margin-top:10px">Les rappels sont déjà dans l'agenda partagé <b>« Bifco Team »</b> (un rappel par jour, mis à jour tout seul). Ce bloc sert seulement si un membre veut aussi les voir sur son <b>agenda Google personnel</b> — sinon, ignore-le.</p>
     <ol class="cal-etapes">
       <li>Copie ton adresse privée de calendrier :
         <div class="cal-url-ligne">
