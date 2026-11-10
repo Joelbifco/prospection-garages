@@ -2055,6 +2055,63 @@ async function reclasserSegmentsV1() {
   console.log(`  🗂️  Reclassement v2 : ${bilan.desabonne} désabonné(s), ${bilan.pasInteresse} « pas intéressé », ${bilan.corrige} faux désabonnés corrigés.`);
 }
 
+// Rattrapage UNIQUE des leads « à rappeler » (demande de Joel, 10 nov 2026) :
+// la détection de numéro a été ajoutée au flux des réponses APRÈS coup. Tous les
+// garages déjà intéressés AVEC un numéro (dans un ancien courriel ou récolté au
+// ratissage) n'ont jamais été versés dans « À rappeler ». On le fait une seule
+// fois (marqueur-fichier), sur TOUTES les campagnes. Idempotent et prudent :
+//   - ne touche QUE les contacts sans aRappeler ni rappelFait ;
+//   - jamais un refus (désabonné / pas intéressé) ;
+//   - exige une vraie réponse intéressée (ni auto, ni refus) ET un numéro.
+async function rattrapageLeadsV1() {
+  const marqueur = path.join(DATA_DIR, 'rattrapage-leads-v1.done');
+  if (existsSync(marqueur)) return;
+  let total = 0;
+  for (const camp of CAMPAIGNS) {
+    try {
+      await campaignCtx.run(camp.id, async () => {
+        const [replies, contacts] = await Promise.all([load('replies'), load('contacts')]);
+        if (!contacts.length) return;
+        const parContact = new Map();
+        for (const r of replies) {
+          if (!r.contactId) continue;
+          if (!parContact.has(r.contactId)) parContact.set(r.contactId, []);
+          parContact.get(r.contactId).push(r);
+        }
+        let change = false;
+        for (const c of contacts) {
+          if (c.aRappeler || c.rappelFait) continue;            // déjà traité
+          if (c.segment === 'desabonne' || c.segment === 'pas-interesse') continue; // jamais un refus
+          const rs = parContact.get(c.id);
+          if (!rs || !rs.length) continue;
+          // au moins une réponse VRAIMENT intéressée (ni auto, ni refus)
+          const interessees = rs
+            .filter((r) => !r.auto && !isRejection(r.text || ''))
+            .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+          if (!interessees.length) continue;
+          // numéro : dans le texte d'une réponse intéressée, sinon le téléphone récolté
+          let tel = '';
+          let src = interessees[0];
+          for (const r of interessees) {
+            const t = extraireTelephone(r.text || '');
+            if (t) { tel = t; src = r; break; }
+          }
+          if (!tel) tel = numeroDuContact(c, '');              // repli : c.phone récolté
+          if (!tel) continue;
+          c.aRappeler = { tel, depuis: src.date || null, sujet: src.subject || '' };
+          change = true;
+          total++;
+        }
+        if (change) await save('contacts', contacts);
+      });
+    } catch (e) {
+      console.error(`  ⚠  Rattrapage leads ${camp.id} : ${e.message}`);
+    }
+  }
+  try { await writeFile(marqueur, new Date().toISOString(), 'utf8'); } catch {}
+  console.log(`  📞  Rattrapage leads : ${total} garage(s) versé(s) dans « À rappeler ».`);
+}
+
 // ---------------------------------------------------------------------------
 //  Réponses : lire la boîte Gmail (IMAP) et repérer les garages qui ont répondu
 // ---------------------------------------------------------------------------
@@ -3981,6 +4038,11 @@ server.listen(PORT, () => {
 // range les « non merci » / désabonnements déjà reçus dans les bonnes colonnes.
 // Une seule fois (marqueur-fichier), non bloquant pour le démarrage.
 setTimeout(() => reclasserSegmentsV1().catch((e) => console.error('  ⚠  Reclassement :', e.message)), 8000);
+
+// Rattrapage UNIQUE des leads « à rappeler » (demande de Joel, 10 nov 2026) :
+// verse dans « À rappeler » les garages déjà intéressés avec un numéro. Après le
+// reclassement (pour ne jamais rappeler un refus), une seule fois, non bloquant.
+setTimeout(() => rattrapageLeadsV1().catch((e) => console.error('  ⚠  Rattrapage leads :', e.message)), 12000);
 
 // Exécute une tâche pour CHAQUE campagne, chacune dans son propre contexte.
 function forEachCampaign(fn) {
