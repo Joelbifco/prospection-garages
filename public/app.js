@@ -673,11 +673,17 @@ $('#btn-check-replies').addEventListener('click', async () => {
   }
 });
 
-// Volet « 📞 À rappeler » : les garages intéressés dont on a le numéro. C'est la
-// liste de travail ; l'alerte qui saute aux yeux, elle, arrive sur SIMA.
-function renderLeadsPanneau(data) {
+// Volet « 📞 À rappeler » : suivi de tâche d'ÉQUIPE. Joel ne rappelle pas lui-même ;
+// il supervise. On montre les garages À rappeler (bien en vue) ET ceux DÉJÀ rappelés
+// (par qui, quand), pour qu'il voie d'un coup d'œil si l'équipe suit.
+function nomRappeleur() {
+  try { return localStorage.getItem('rappeleur') || ''; } catch { return ''; }
+}
+function renderLeadsPanneau(data, faitsData) {
   const leads = (data && data.leads) || [];
+  const faits = (faitsData && faitsData.faits) || [];
   const auto = !!(data && data.autoActif);
+  const fmt = (d) => d ? new Date(d).toLocaleString('fr-CA', { dateStyle: 'short', timeStyle: 'short' }) : '';
   const cartes = leads.length
     ? leads.map((l) => `
       <div class="lead-carte" data-id="${esc(l.contactId)}">
@@ -687,23 +693,45 @@ function renderLeadsPanneau(data) {
         </div>
         <a class="lead-tel" href="tel:${esc(String(l.tel).replace(/[^\d+]/g, ''))}">📞 ${esc(l.tel)}</a>
         ${l.sujet ? `<div class="lead-sujet">${esc(l.sujet)}</div>` : ''}
-        <button class="lead-fait" data-id="${esc(l.contactId)}">✅ Fait</button>
+        <button class="lead-fait" data-id="${esc(l.contactId)}">✅ Rappelé</button>
       </div>`).join('')
-    : '<p class="rep-vide" style="text-align:left">Aucun garage à rappeler pour l’instant.</p>';
+    : '<p class="rep-vide" style="text-align:left">Aucun garage à rappeler pour l’instant. 👍</p>';
+  const faitsHtml = faits.length
+    ? faits.map((f) => `
+      <div class="fait-ligne" data-id="${esc(f.contactId)}">
+        <span class="fait-nom">${esc(f.name) || esc(f.email) || 'Garage'}</span>
+        <span class="fait-tel">${esc(f.tel) || ''}</span>
+        <span class="fait-meta">✅ ${f.par ? 'par ' + esc(f.par) + ' · ' : ''}${esc(fmt(f.quand))}</span>
+        <button class="fait-undo" data-id="${esc(f.contactId)}" title="Remettre à rappeler">↩</button>
+      </div>`).join('')
+    : '<p class="rep-vide" style="text-align:left">Rien encore.</p>';
   return `
-  <section class="leads-panneau card">
+  <section class="leads-panneau card ${leads.length ? 'leads-chaud' : ''}">
     <div class="leads-tete">
       <h3 style="margin:0">📞 À rappeler <span class="leads-n">${leads.length}</span></h3>
-      <label class="leads-switch" title="Quand un garage intéressé ne laisse pas de numéro, répondre tout seul pour le demander. Rodage : laisse OFF tant que tu n’as pas vu les premières passer.">
-        <input type="checkbox" id="leads-auto" ${auto ? 'checked' : ''}>
-        <span>Réponse auto « demander le numéro »</span>
-      </label>
+      <div class="leads-outils">
+        <input id="rappeleur" class="rappeleur" placeholder="Ton nom" value="${esc(nomRappeleur())}" title="Pour le suivi : qui rappelle ce garage (retenu sur cet appareil).">
+        <label class="leads-switch" title="Quand un garage intéressé ne laisse pas de numéro, répondre tout seul pour le demander. Rodage : laisse OFF tant que tu n’as pas vu les premières passer.">
+          <input type="checkbox" id="leads-auto" ${auto ? 'checked' : ''}>
+          <span>Réponse auto « demander le numéro »</span>
+        </label>
+      </div>
     </div>
     <div class="leads-corps">${cartes}</div>
+    <details class="faits-bloc"${faits.length ? '' : ' hidden'}>
+      <summary>✅ Rappelés <span class="faits-n">${faits.length}</span></summary>
+      <div class="faits-liste">${faitsHtml}</div>
+    </details>
   </section>`;
 }
 
 function wireLeadsPanneau() {
+  const nameInput = document.getElementById('rappeleur');
+  if (nameInput) {
+    nameInput.addEventListener('change', () => {
+      try { localStorage.setItem('rappeleur', nameInput.value.trim()); } catch {}
+    });
+  }
   const tog = document.getElementById('leads-auto');
   if (tog) {
     tog.addEventListener('change', async () => {
@@ -719,13 +747,27 @@ function wireLeadsPanneau() {
   $$('.lead-fait').forEach((btn) =>
     btn.addEventListener('click', async () => {
       btn.disabled = true;
+      const par = (document.getElementById('rappeleur')?.value || '').trim();
+      try { localStorage.setItem('rappeleur', par); } catch {}
       try {
-        await api('/leads/fait', 'POST', { contactId: btn.dataset.id });
-        const carte = btn.closest('.lead-carte');
-        if (carte) carte.remove();
-        const n = document.querySelector('.leads-n');
-        if (n) n.textContent = Math.max(0, (parseInt(n.textContent, 10) || 1) - 1);
-        toast('Rappel marqué fait', 'ok');
+        await api('/leads/fait', 'POST', { contactId: btn.dataset.id, par });
+        await loadReplies();   // recharge À rappeler + Rappelés
+        rafraichirRappels();   // maj bannière + compteur d'onglet
+        toast('Marqué rappelé', 'ok');
+      } catch {
+        btn.disabled = false;
+        toast('Erreur', 'err');
+      }
+    })
+  );
+  $$('.fait-undo').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        await api('/leads/refaire', 'POST', { contactId: btn.dataset.id });
+        await loadReplies();
+        rafraichirRappels();
+        toast('Remis à rappeler', 'info');
       } catch {
         btn.disabled = false;
         toast('Erreur', 'err');
@@ -738,8 +780,10 @@ async function loadReplies() {
   const replies = await api('/replies');
   const box = $('#replies-list');
   let dataLeads = { leads: [], autoActif: false };
+  let dataFaits = { faits: [] };
   try { dataLeads = await api('/leads'); } catch { /* pas bloquant */ }
-  const panneauLeads = renderLeadsPanneau(dataLeads);
+  try { dataFaits = await api('/leads/faits'); } catch { /* pas bloquant */ }
+  const panneauLeads = renderLeadsPanneau(dataLeads, dataFaits);
   if (!replies.length) {
     box.innerHTML = panneauLeads +
       '<p style="color:var(--muted);margin-top:16px">Aucune réponse pour le moment. Clique « Vérifier les réponses » pour lire ta boîte Gmail.</p>';
@@ -810,6 +854,7 @@ async function loadReplies() {
     </section>`;
   }).join('') + `</div>`;
   wireLeadsPanneau();
+  rafraichirRappels();
 
   $$('.rc-send').forEach((btn) =>
     btn.addEventListener('click', async () => {
@@ -1187,6 +1232,46 @@ $('#btn-test-mail').addEventListener('click', async () => {
   if (r.ok) toast('Courriel de test envoyé', 'ok');
 });
 
+// ===== Garages à rappeler : bannière globale + compteur d'onglet =====
+// Doit sauter aux yeux depuis N'IMPORTE QUEL onglet : dès qu'il y a des garages à
+// rappeler, une bannière s'affiche en haut et un chiffre apparaît sur « Réponses ».
+async function rafraichirRappels() {
+  let n = 0;
+  try {
+    const d = await api('/leads');
+    n = ((d && d.leads) || []).length;
+  } catch { return; }
+  const badge = document.getElementById('tab-rappel-badge');
+  if (badge) {
+    badge.textContent = n;
+    badge.classList.toggle('hidden', n === 0);
+  }
+  const ban = document.getElementById('rappel-banner');
+  const bn = document.getElementById('rappel-banner-n');
+  if (ban && bn) {
+    bn.textContent = n;
+    ban.classList.toggle('hidden', n === 0);
+  }
+}
+(function wireRappelBanner() {
+  const ban = document.getElementById('rappel-banner');
+  if (!ban) return;
+  const aller = () => {
+    const btn = document.querySelector('#tabs button[data-tab="reponses"]');
+    if (btn) btn.click();
+    setTimeout(() => {
+      const panneau = document.querySelector('.leads-panneau');
+      if (panneau) panneau.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 60);
+  };
+  ban.addEventListener('click', aller);
+  ban.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); aller(); }
+  });
+})();
+
 // ===== Démarrage =====
 initCampaigns();
 refreshBadge();
+rafraichirRappels();
+setInterval(rafraichirRappels, 60000);

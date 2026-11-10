@@ -240,6 +240,34 @@ a:hover { text-decoration: underline; }
 .lead-fait { align-self: flex-start; margin-top: 2px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 5px 10px; font-size: 13px; cursor: pointer; }
 .lead-fait:hover { border-color: var(--ok); }
 
+/* Bannière globale « garages à rappeler » — visible sur tous les onglets. */
+.rappel-banner { display: flex; align-items: center; justify-content: center; gap: 12px; cursor: pointer; background: linear-gradient(90deg, rgba(62,207,142,.18), rgba(79,140,255,.18)); border-top: 1px solid var(--ok); border-bottom: 1px solid var(--ok); color: var(--text); padding: 12px 18px; font-size: 15px; font-weight: 600; }
+.rappel-banner:hover { background: linear-gradient(90deg, rgba(62,207,142,.30), rgba(79,140,255,.30)); }
+.rappel-banner-txt strong { color: var(--ok); font-size: 17px; }
+.rappel-banner-cta { color: var(--accent); font-weight: 700; }
+@keyframes rappelPulse { 0%,100% { box-shadow: inset 0 0 0 0 rgba(62,207,142,0); } 50% { box-shadow: inset 0 3px 0 0 var(--ok); } }
+.rappel-banner:not(.hidden) { animation: rappelPulse 2.4s ease-in-out infinite; }
+
+/* Compteur sur l'onglet « Réponses ». */
+.tab-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--ok); color: #06231a; font-size: 11px; font-weight: 800; margin-left: 2px; vertical-align: middle; }
+
+/* Volet « À rappeler » plus criant quand il y a des leads. */
+.leads-chaud { border: 1px solid var(--ok); box-shadow: inset 0 0 0 1px rgba(62,207,142,.25); }
+.leads-outils { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rappeleur { width: 120px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 5px 9px; font-size: 13px; }
+
+/* Liste des garages DÉJÀ rappelés (suivi d'équipe). */
+.faits-bloc { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.faits-bloc summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; user-select: none; }
+.faits-n { background: var(--bg); color: var(--muted); border-radius: 999px; padding: 0 7px; font-size: 12px; font-weight: 700; }
+.faits-liste { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.fait-ligne { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 5px 8px; border-radius: 7px; background: var(--panel-2); }
+.fait-nom { font-weight: 600; min-width: 140px; }
+.fait-tel { color: var(--muted); }
+.fait-meta { color: var(--ok); margin-left: auto; font-size: 12px; }
+.fait-undo { background: var(--bg); border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 2px 7px; cursor: pointer; font-size: 12px; }
+.fait-undo:hover { border-color: var(--accent); color: var(--text); }
+
 /* L'onglet Réponses sort du conteneur central (1200px) et prend toute la
    largeur de l'écran — le tableau a besoin de respirer. Les autres onglets
    gardent leur colonne centrée. */

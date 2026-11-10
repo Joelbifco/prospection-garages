@@ -33,12 +33,19 @@
     <button data-tab="entonnoir">🎯 Entonnoir</button>
     <button data-tab="courriels">✉️ Courriels</button>
     <button data-tab="envoi">📤 Envoi</button>
-    <button data-tab="reponses">💬 Réponses</button>
+    <button data-tab="reponses">💬 Réponses <span id="tab-rappel-badge" class="tab-badge hidden">0</span></button>
     <button data-tab="stats">📊 Stats</button>
     <button data-tab="resultats">💰 Résultats</button>
     <button data-tab="auto">🤖 Auto</button>
     <button data-tab="reglages">⚙️ Réglages</button>
   </nav>
+
+  <!-- Bannière « garages à rappeler » : visible sur TOUS les onglets dès qu'il y
+       a des leads, pour que ça saute aux yeux de toute l'équipe. -->
+  <div id="rappel-banner" class="rappel-banner hidden" role="button" tabindex="0">
+    <span class="rappel-banner-txt">📞 <strong id="rappel-banner-n">0</strong> garage(s) à rappeler</span>
+    <span class="rappel-banner-cta">Voir →</span>
+  </div>
 
   <main>
     <!-- ============ RECHERCHE ============ -->

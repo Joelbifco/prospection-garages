@@ -3782,17 +3782,60 @@ async function handleApi(req, res, url) {
       .sort((a, b) => new Date(a.depuis || 0) - new Date(b.depuis || 0));
     return sendJSON(res, 200, { leads, autoActif: !!(await load('settings')).auto?.demandeNumeroActif });
   }
-  // Marquer un lead rappelé (bouton ✅ Fait). Option la moins destructive : on garde
-  // le contact et on note la date du rappel ; on retire juste le drapeau « à rappeler ».
+  // Marquer un lead rappelé (bouton ✅ Rappelé). Suivi de tâche d'ÉQUIPE : Joel ne
+  // rappelle pas lui-même, il supervise. On enregistre QUI (rappelePar) et QUAND
+  // (rappelFait), et on garde une photo du numéro/sujet (rappelInfo) pour la liste
+  // des rappelés, puisqu'on retire le drapeau « à rappeler ».
   if (p === '/api/leads/fait' && method === 'POST') {
     const body = await readBody(req);
     const contacts = await load('contacts');
     const idx = contacts.findIndex((c) => c.id === body.contactId);
     if (idx < 0) return sendJSON(res, 404, { error: 'contact introuvable' });
-    contacts[idx].rappelFait = new Date().toISOString();
-    delete contacts[idx].aRappeler;
+    const c = contacts[idx];
+    const par = String(body.par || '').trim().slice(0, 40);
+    c.rappelFait = new Date().toISOString();
+    if (par) c.rappelePar = par; else delete c.rappelePar;
+    c.rappelInfo = { tel: (c.aRappeler && c.aRappeler.tel) || c.phone || '', sujet: (c.aRappeler && c.aRappeler.sujet) || '' };
+    delete c.aRappeler;
     await save('contacts', contacts);
     return sendJSON(res, 200, { ok: true });
+  }
+  // Remettre un lead « à rappeler » (annuler un Rappelé marqué par erreur).
+  if (p === '/api/leads/refaire' && method === 'POST') {
+    const body = await readBody(req);
+    const contacts = await load('contacts');
+    const idx = contacts.findIndex((c) => c.id === body.contactId);
+    if (idx < 0) return sendJSON(res, 404, { error: 'contact introuvable' });
+    const c = contacts[idx];
+    c.aRappeler = {
+      tel: (c.rappelInfo && c.rappelInfo.tel) || c.phone || '',
+      depuis: new Date().toISOString(),
+      sujet: (c.rappelInfo && c.rappelInfo.sujet) || '',
+    };
+    delete c.rappelFait;
+    delete c.rappelePar;
+    await save('contacts', contacts);
+    return sendJSON(res, 200, { ok: true });
+  }
+  // Liste des garages DÉJÀ rappelés (campagne courante) — pour que Joel supervise
+  // le travail de l'équipe : qui a rappelé qui, et quand. Les 100 plus récents.
+  if (p === '/api/leads/faits' && method === 'GET') {
+    const contacts = await load('contacts');
+    const faits = contacts
+      .filter((c) => c.rappelFait)
+      .map((c) => ({
+        contactId: c.id,
+        name: c.name || '',
+        email: c.email || '',
+        tel: (c.rappelInfo && c.rappelInfo.tel) || c.phone || '',
+        sujet: (c.rappelInfo && c.rappelInfo.sujet) || '',
+        zone: c.zone || c.city || '',
+        quand: c.rappelFait,
+        par: c.rappelePar || '',
+      }))
+      .sort((a, b) => new Date(b.quand) - new Date(a.quand))
+      .slice(0, 100);
+    return sendJSON(res, 200, { faits });
   }
   // Interrupteur de la réponse auto « demander le numéro » (rodage → OFF au départ).
   if (p === '/api/leads/auto' && method === 'POST') {
