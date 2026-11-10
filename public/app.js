@@ -673,12 +673,77 @@ $('#btn-check-replies').addEventListener('click', async () => {
   }
 });
 
+// Volet « 📞 À rappeler » : les garages intéressés dont on a le numéro. C'est la
+// liste de travail ; l'alerte qui saute aux yeux, elle, arrive sur SIMA.
+function renderLeadsPanneau(data) {
+  const leads = (data && data.leads) || [];
+  const auto = !!(data && data.autoActif);
+  const cartes = leads.length
+    ? leads.map((l) => `
+      <div class="lead-carte" data-id="${esc(l.contactId)}">
+        <div class="lead-h">
+          <span class="lead-nom">${esc(l.name) || esc(l.email) || 'Garage'}</span>
+          ${l.zone ? `<span class="lead-zone">${esc(l.zone)}</span>` : ''}
+        </div>
+        <a class="lead-tel" href="tel:${esc(String(l.tel).replace(/[^\d+]/g, ''))}">📞 ${esc(l.tel)}</a>
+        ${l.sujet ? `<div class="lead-sujet">${esc(l.sujet)}</div>` : ''}
+        <button class="lead-fait" data-id="${esc(l.contactId)}">✅ Fait</button>
+      </div>`).join('')
+    : '<p class="rep-vide" style="text-align:left">Aucun garage à rappeler pour l’instant.</p>';
+  return `
+  <section class="leads-panneau card">
+    <div class="leads-tete">
+      <h3 style="margin:0">📞 À rappeler <span class="leads-n">${leads.length}</span></h3>
+      <label class="leads-switch" title="Quand un garage intéressé ne laisse pas de numéro, répondre tout seul pour le demander. Rodage : laisse OFF tant que tu n’as pas vu les premières passer.">
+        <input type="checkbox" id="leads-auto" ${auto ? 'checked' : ''}>
+        <span>Réponse auto « demander le numéro »</span>
+      </label>
+    </div>
+    <div class="leads-corps">${cartes}</div>
+  </section>`;
+}
+
+function wireLeadsPanneau() {
+  const tog = document.getElementById('leads-auto');
+  if (tog) {
+    tog.addEventListener('change', async () => {
+      try {
+        const r = await api('/leads/auto', 'POST', { actif: tog.checked });
+        toast(r.actif ? 'Réponse auto ACTIVÉE' : 'Réponse auto désactivée', r.actif ? 'ok' : 'info');
+      } catch {
+        tog.checked = !tog.checked;
+        toast('Impossible de changer le réglage', 'err');
+      }
+    });
+  }
+  $$('.lead-fait').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        await api('/leads/fait', 'POST', { contactId: btn.dataset.id });
+        const carte = btn.closest('.lead-carte');
+        if (carte) carte.remove();
+        const n = document.querySelector('.leads-n');
+        if (n) n.textContent = Math.max(0, (parseInt(n.textContent, 10) || 1) - 1);
+        toast('Rappel marqué fait', 'ok');
+      } catch {
+        btn.disabled = false;
+        toast('Erreur', 'err');
+      }
+    })
+  );
+}
+
 async function loadReplies() {
   const replies = await api('/replies');
   const box = $('#replies-list');
+  let dataLeads = { leads: [], autoActif: false };
+  try { dataLeads = await api('/leads'); } catch { /* pas bloquant */ }
+  const panneauLeads = renderLeadsPanneau(dataLeads);
   if (!replies.length) {
-    box.innerHTML =
+    box.innerHTML = panneauLeads +
       '<p style="color:var(--muted);margin-top:16px">Aucune réponse pour le moment. Clique « Vérifier les réponses » pour lire ta boîte Gmail.</p>';
+    wireLeadsPanneau();
     return;
   }
   const COLS = [
@@ -737,13 +802,14 @@ async function loadReplies() {
     </div>`;
   };
 
-  box.innerHTML = `<div class="rep-board">` + COLS.map((c) => {
+  box.innerHTML = panneauLeads + `<div class="rep-board">` + COLS.map((c) => {
     const liste = parColonne[c.key];
     return `<section class="rep-col rep-col-${c.key}">
       <header class="rep-col-head"><span>${c.icone} ${c.titre}</span><span class="rep-col-n">${liste.length}</span></header>
       <div class="rep-col-body">${liste.length ? liste.map(carte).join('') : '<p class="rep-vide">—</p>'}</div>
     </section>`;
   }).join('') + `</div>`;
+  wireLeadsPanneau();
 
   $$('.rc-send').forEach((btn) =>
     btn.addEventListener('click', async () => {

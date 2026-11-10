@@ -1967,6 +1967,46 @@ const isSoftNo = (t) =>
 // Un refus (dur OU mou) n'est pas une piste à signaler.
 const isRejection = (t) => isHardOptOut(t) || isSoftNo(t);
 
+// ---------------------------------------------------------------------------
+//  Leads : repérer le NUMÉRO d'un garage intéressé pour qu'un humain le rappelle
+// ---------------------------------------------------------------------------
+// But de la prospection : trouver des partenaires installateurs ET/OU leur vendre
+// des moteurs. Dans les deux cas, ce qu'on veut c'est le CONTACT — pas vendre par
+// courriel (ça brûlerait les boîtes). On extrait le téléphone depuis les SEULS mots
+// de la personne (premierBout coupe le fil cité, donc notre propre pied de courriel
+// n'est jamais analysé).
+function extraireTelephone(texte) {
+  const p = premierBout(texte);
+  // Numéro nord-américain AVEC séparateur (point, tiret, espace, parenthèses). Le
+  // séparateur obligatoire évite d'attraper un ID de 10 chiffres collés (no de
+  // commande, référence d'article d'un autorépondeur…). Le lookbehind/lookahead
+  // empêche de piger au milieu d'une suite plus longue de chiffres.
+  const avecSep = p.match(/(?<!\d)(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\d)/);
+  if (avecSep) return avecSep[0].replace(/\s+/g, ' ').trim();
+  // 10 chiffres collés SEULEMENT s'ils suivent un mot-clé « téléphone » explicite.
+  const colle = p.match(/(?:t[ée]l|cell|phone|t[ée]l[ée]phone|num[ée]ro|joindre|rejoindre|contact|appel)\D{0,12}(?<!\d)(\d{10})(?!\d)/i);
+  if (colle) return colle[1];
+  return null;
+}
+// Numéro en main pour ce contact : d'abord dans sa réponse, sinon le téléphone déjà
+// récolté au ratissage (champ de données fiable → on lui fait confiance tel quel).
+function numeroDuContact(contact, text) {
+  const t = extraireTelephone(text);
+  if (t) return t;
+  const p = (contact && contact.phone ? String(contact.phone) : '').trim();
+  if (p && p.replace(/\D/g, '').length >= 10) return p;
+  return '';
+}
+// Réponse auto UNIQUE quand un garage intéressé n'a pas laissé de numéro. Générique
+// (« L'équipe Bifco »), « vous », courte, ouverte au partenariat COMME à la vente.
+// Ne donne JAMAIS de prix : ça, ça se règle au téléphone avec un humain.
+const REPONSE_DEMANDE_NUMERO =
+  'Bonjour,\n\n' +
+  'Parfait, merci de votre intérêt ! Quel est le meilleur numéro pour vous joindre ? ' +
+  'Un conseiller de Bifco vous rappelle rapidement pour vos besoins en moteurs et transmissions — ' +
+  'installation comme achat.\n\n' +
+  'Au plaisir,\nL\'équipe Bifco';
+
 // Reclassement UNIQUE des réponses déjà reçues (demande de Joel, 9 nov 2026) :
 // les « non merci » / désabonnements lus AVANT l'ajout du classement n'avaient pas
 // de segment. On les range une seule fois (marqueur-fichier), sur TOUTES les
@@ -2045,6 +2085,7 @@ async function checkReplies() {
   const bounceCandidates = [];
   let bounceHits = 0;
   const interesting = []; // réponses qui ne sont PAS un refus → à signaler
+  const besoinDemande = []; // leads intéressés SANS numéro → réponse auto (si activée)
 
   // isHardOptOut / isSoftNo / isRejection : définis au niveau module (voir plus haut).
 
@@ -2144,6 +2185,19 @@ async function checkReplies() {
           // VERROUILLE : on ne le rétrograde jamais à « pas-interesse ».
           if (isHardOptOut(text)) contacts[idx].segment = 'desabonne';
           else if (isSoftNo(text) && contacts[idx].segment !== 'desabonne') contacts[idx].segment = 'pas-interesse';
+          // Lead : réponse intéressée (ni refus, ni auto). On vise le CONTACT.
+          if (!isRejection(text)) {
+            const tel = numeroDuContact(contacts[idx], text);
+            if (tel) {
+              // Numéro en main → À RAPPELER par un humain, aucune réponse auto.
+              if (!contacts[idx].aRappeler && !contacts[idx].rappelFait) {
+                contacts[idx].aRappeler = { tel, depuis: rec.date, sujet: rec.subject };
+              }
+            } else if (!contacts[idx].demandeNumeroEnvoyee && !contacts[idx].aRappeler && !contacts[idx].rappelFait) {
+              // Pas de numéro → on demandera le meilleur contact, une seule fois.
+              besoinDemande.push(m.contact.id);
+            }
+          }
         }
       }
       // Rebonds (mauvaises adresses) → marquer le garage « invalide »
@@ -2184,6 +2238,28 @@ async function checkReplies() {
     await client.logout().catch(() => {});
   }
   await Promise.all([save('replies', replies), save('contacts', contacts), save('bounces', bounces)]);
+
+  // Réponse auto « donnez-nous votre meilleur numéro » aux leads SANS numéro.
+  // INTERRUPTEUR (défaut OFF = mode rodage) : tant que settings.auto.demandeNumeroActif
+  // n'est pas true, on n'envoie RIEN — les leads sans numéro restent visibles dans
+  // « À traiter » et peuvent être relancés à la main. Une seule demande par contact.
+  if (besoinDemande.length && settings.auto?.demandeNumeroActif) {
+    const contacts2 = await load('contacts');
+    let chg = false;
+    for (const cid of besoinDemande) {
+      const c = contacts2.find((x) => x.id === cid);
+      if (!c || c.demandeNumeroEnvoyee || c.aRappeler || c.rappelFait) continue;
+      if (c.segment === 'desabonne' || c.segment === 'pas-interesse') continue; // jamais un refus
+      try {
+        await sendReplyTo(cid, REPONSE_DEMANDE_NUMERO, { sansSignature: true });
+        c.demandeNumeroEnvoyee = new Date().toISOString();
+        chg = true;
+      } catch {
+        /* échec d'envoi : on réessaiera au prochain passage */
+      }
+    }
+    if (chg) await save('contacts', contacts2);
+  }
 
   // Alerte : réponses potentiellement intéressées (hors refus) → courriel à l'utilisateur
   const notifyTo = (settings.replyNotifyEmail || '').trim();
@@ -2300,7 +2376,7 @@ async function notifyPositiveReplies(settings, to, replies) {
 }
 
 // Répondre à un garage (envoi SMTP dans le même fil, hors plafond de réchauffement)
-async function sendReplyTo(contactId, body) {
+async function sendReplyTo(contactId, body, opts = {}) {
   const [settings, contacts, replies, sends] = await Promise.all([
     load('settings'),
     load('contacts'),
@@ -2318,7 +2394,7 @@ async function sendReplyTo(contactId, body) {
     .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
   let subject = last?.subject || 'Votre message';
   if (!/^\s*re\s*:/i.test(subject)) subject = 'Re : ' + subject;
-  const sig = settings.signature ? '\n\n' + settings.signature : '';
+  const sig = (!opts.sansSignature && settings.signature) ? '\n\n' + settings.signature : '';
   const info = await transport.sendMail({
     from: fromLine,
     to: contact.email,
@@ -2880,6 +2956,33 @@ async function handleApi(req, res, url) {
       tot.repondu += l.repondu; tot.envoyesAuj += l.envoyesAuj;
     }
     return sendJSON(res, 200, { at: new Date().toISOString(), campagnes: lignes, totaux: tot });
+  }
+
+  // --- Leads « À rappeler » de TOUTES les campagnes (consommé par SIMA) ---
+  // SIMA lit ça et en fait des notifications « Rappeler [garage] au [numéro] ».
+  if (p === '/api/leads/tous' && method === 'GET') {
+    const out = [];
+    for (const c of CAMPAIGNS) {
+      const ls = await campaignCtx.run(c.id, async () => {
+        const contacts = await load('contacts');
+        return contacts
+          .filter((x) => x.aRappeler && !x.rappelFait)
+          .map((x) => ({
+            campagne: c.id,
+            campagneNom: c.name,
+            contactId: x.id,
+            name: x.name || '',
+            email: x.email || '',
+            tel: x.aRappeler.tel,
+            sujet: x.aRappeler.sujet || '',
+            depuis: x.aRappeler.depuis || null,
+            zone: x.zone || x.city || '',
+          }));
+      });
+      out.push(...ls);
+    }
+    out.sort((a, b) => new Date(a.depuis || 0) - new Date(b.depuis || 0));
+    return sendJSON(res, 200, { at: new Date().toISOString(), leads: out });
   }
 
   // --- Performance : comparer les COURRIELS (modèles) et les SECTEURS (niches) ---
@@ -3659,6 +3762,46 @@ async function handleApi(req, res, url) {
     else contacts[idx].segment = seg;
     await save('contacts', contacts);
     return sendJSON(res, 200, { ok: true, segment: contacts[idx].segment || null });
+  }
+  // --- Leads « À RAPPELER » : garages intéressés dont on a le numéro ---
+  // La liste de travail (la campagne courante). Plus vieux d'abord = priorité par
+  // attente, comme le veut Joel. SIMA, lui, lit /api/leads/tous (toutes campagnes).
+  if (p === '/api/leads' && method === 'GET') {
+    const contacts = await load('contacts');
+    const leads = contacts
+      .filter((c) => c.aRappeler && !c.rappelFait)
+      .map((c) => ({
+        contactId: c.id,
+        name: c.name || '',
+        email: c.email || '',
+        tel: c.aRappeler.tel,
+        sujet: c.aRappeler.sujet || '',
+        depuis: c.aRappeler.depuis || null,
+        zone: c.zone || c.city || '',
+      }))
+      .sort((a, b) => new Date(a.depuis || 0) - new Date(b.depuis || 0));
+    return sendJSON(res, 200, { leads, autoActif: !!(await load('settings')).auto?.demandeNumeroActif });
+  }
+  // Marquer un lead rappelé (bouton ✅ Fait). Option la moins destructive : on garde
+  // le contact et on note la date du rappel ; on retire juste le drapeau « à rappeler ».
+  if (p === '/api/leads/fait' && method === 'POST') {
+    const body = await readBody(req);
+    const contacts = await load('contacts');
+    const idx = contacts.findIndex((c) => c.id === body.contactId);
+    if (idx < 0) return sendJSON(res, 404, { error: 'contact introuvable' });
+    contacts[idx].rappelFait = new Date().toISOString();
+    delete contacts[idx].aRappeler;
+    await save('contacts', contacts);
+    return sendJSON(res, 200, { ok: true });
+  }
+  // Interrupteur de la réponse auto « demander le numéro » (rodage → OFF au départ).
+  if (p === '/api/leads/auto' && method === 'POST') {
+    const body = await readBody(req);
+    const settings = await load('settings');
+    settings.auto = settings.auto || {};
+    settings.auto.demandeNumeroActif = !!body.actif;
+    await save('settings', settings);
+    return sendJSON(res, 200, { ok: true, actif: settings.auto.demandeNumeroActif });
   }
   // Fil de conversation complet avec un contact — pour le bouton « voir le
   // courriel envoyé / la chaîne ». Fusionne les courriels ENVOYÉS (sujet stocké,

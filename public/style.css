@@ -223,6 +223,23 @@ a:hover { text-decoration: underline; }
 .rc-move-btn { background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-move-btn:hover { border-color: var(--accent); }
 
+/* Volet « 📞 À rappeler » : la liste de travail des leads avec numéro. */
+.leads-panneau { margin-bottom: 16px; }
+.leads-tete { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.leads-n { background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 9px; font-size: 13px; font-weight: 700; }
+.leads-switch { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
+.leads-switch input { width: 16px; height: 16px; cursor: pointer; }
+.leads-corps { display: flex; gap: 10px; flex-wrap: wrap; }
+.lead-carte { background: var(--panel-2); border: 1px solid var(--line); border-left: 3px solid var(--ok); border-radius: 10px; padding: 12px; flex: 0 1 240px; min-width: 210px; display: flex; flex-direction: column; gap: 6px; }
+.lead-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.lead-nom { font-weight: 700; font-size: 14px; }
+.lead-zone { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.lead-tel { font-size: 16px; font-weight: 700; color: var(--ok); text-decoration: none; }
+.lead-tel:hover { text-decoration: underline; }
+.lead-sujet { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lead-fait { align-self: flex-start; margin-top: 2px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 5px 10px; font-size: 13px; cursor: pointer; }
+.lead-fait:hover { border-color: var(--ok); }
+
 /* L'onglet Réponses sort du conteneur central (1200px) et prend toute la
    largeur de l'écran — le tableau a besoin de respirer. Les autres onglets
    gardent leur colonne centrée. */
