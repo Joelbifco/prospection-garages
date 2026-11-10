@@ -113,6 +113,7 @@ $$('#tabs button').forEach((b) =>
     if (b.dataset.tab === 'courriels') loadTemplates();
     if (b.dataset.tab === 'envoi') initSend();
     if (b.dataset.tab === 'reponses') loadReplies();
+    if (b.dataset.tab === 'rappels') loadRappels();
     if (b.dataset.tab === 'stats') loadStats();
     if (b.dataset.tab === 'resultats') loadResultats();
     if (b.dataset.tab === 'auto') loadAuto();
@@ -751,7 +752,7 @@ function wireLeadsPanneau() {
       try { localStorage.setItem('rappeleur', par); } catch {}
       try {
         await api('/leads/fait', 'POST', { contactId: btn.dataset.id, par });
-        await loadReplies();   // recharge À rappeler + Rappelés
+        await loadRappels();   // recharge À rappeler + Rappelés
         rafraichirRappels();   // maj bannière + compteur d'onglet
         toast('Marqué rappelé', 'ok');
       } catch {
@@ -765,7 +766,7 @@ function wireLeadsPanneau() {
       btn.disabled = true;
       try {
         await api('/leads/refaire', 'POST', { contactId: btn.dataset.id });
-        await loadReplies();
+        await loadRappels();
         rafraichirRappels();
         toast('Remis à rappeler', 'info');
       } catch {
@@ -776,18 +777,26 @@ function wireLeadsPanneau() {
   );
 }
 
-async function loadReplies() {
-  const replies = await api('/replies');
-  const box = $('#replies-list');
+// Onglet dédié « 📞 À rappeler » : la liste d'appels de l'équipe + le suivi
+// « qui a rappelé, quand ». Sorti de l'onglet Réponses pour que ça saute aux yeux.
+async function loadRappels() {
+  const box = $('#rappels-list');
+  if (!box) return;
   let dataLeads = { leads: [], autoActif: false };
   let dataFaits = { faits: [] };
   try { dataLeads = await api('/leads'); } catch { /* pas bloquant */ }
   try { dataFaits = await api('/leads/faits'); } catch { /* pas bloquant */ }
-  const panneauLeads = renderLeadsPanneau(dataLeads, dataFaits);
+  box.innerHTML = renderLeadsPanneau(dataLeads, dataFaits);
+  wireLeadsPanneau();
+  rafraichirRappels();
+}
+
+async function loadReplies() {
+  const replies = await api('/replies');
+  const box = $('#replies-list');
   if (!replies.length) {
-    box.innerHTML = panneauLeads +
+    box.innerHTML =
       '<p style="color:var(--muted);margin-top:16px">Aucune réponse pour le moment. Clique « Vérifier les réponses » pour lire ta boîte Gmail.</p>';
-    wireLeadsPanneau();
     return;
   }
   const COLS = [
@@ -846,14 +855,13 @@ async function loadReplies() {
     </div>`;
   };
 
-  box.innerHTML = panneauLeads + `<div class="rep-board">` + COLS.map((c) => {
+  box.innerHTML = `<div class="rep-board">` + COLS.map((c) => {
     const liste = parColonne[c.key];
     return `<section class="rep-col rep-col-${c.key}">
       <header class="rep-col-head"><span>${c.icone} ${c.titre}</span><span class="rep-col-n">${liste.length}</span></header>
       <div class="rep-col-body">${liste.length ? liste.map(carte).join('') : '<p class="rep-vide">—</p>'}</div>
     </section>`;
   }).join('') + `</div>`;
-  wireLeadsPanneau();
   rafraichirRappels();
 
   $$('.rc-send').forEach((btn) =>
@@ -1257,17 +1265,19 @@ async function rafraichirRappels() {
   const ban = document.getElementById('rappel-banner');
   if (!ban) return;
   const aller = () => {
-    const btn = document.querySelector('#tabs button[data-tab="reponses"]');
+    const btn = document.querySelector('#tabs button[data-tab="rappels"]');
     if (btn) btn.click();
-    setTimeout(() => {
-      const panneau = document.querySelector('.leads-panneau');
-      if (panneau) panneau.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 60);
   };
   ban.addEventListener('click', aller);
   ban.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); aller(); }
   });
+})();
+
+// Bouton « Rafraîchir » de l'onglet À rappeler.
+(function wireRappelsRefresh() {
+  const b = document.getElementById('btn-rappels-refresh');
+  if (b) b.addEventListener('click', () => loadRappels());
 })();
 
 // ===== Démarrage =====

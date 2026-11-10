@@ -33,7 +33,8 @@
     <button data-tab="entonnoir">🎯 Entonnoir</button>
     <button data-tab="courriels">✉️ Courriels</button>
     <button data-tab="envoi">📤 Envoi</button>
-    <button data-tab="reponses">💬 Réponses <span id="tab-rappel-badge" class="tab-badge hidden">0</span></button>
+    <button data-tab="reponses">💬 Réponses</button>
+    <button data-tab="rappels">📞 À rappeler <span id="tab-rappel-badge" class="tab-badge hidden">0</span></button>
     <button data-tab="stats">📊 Stats</button>
     <button data-tab="resultats">💰 Résultats</button>
     <button data-tab="auto">🤖 Auto</button>
@@ -208,6 +209,18 @@
         <p class="hint">L'app lit ta boîte courriel (Hostinger) et repère les garages qui t'ont répondu. Clique « Vérifier » (ça se fait aussi tout seul de temps en temps). Tu peux répondre directement ci-dessous, ou voir le courriel que tu avais envoyé.</p>
         <div id="replies-status" class="status"></div>
         <div id="replies-list"></div>
+      </div>
+    </section>
+
+    <!-- ============ À RAPPELER ============ -->
+    <section id="tab-rappels" class="tab">
+      <div class="card">
+        <div class="results-head">
+          <h2>📞 Garages à rappeler</h2>
+          <button id="btn-rappels-refresh" class="primary">🔄 Rafraîchir</button>
+        </div>
+        <p class="hint">Les garages intéressés dont on a le numéro. Un membre de l'équipe les appelle, puis coche « ✅ Rappelé » (mets ton nom une fois). La liste « Rappelés » montre qui a fait quoi, et quand.</p>
+        <div id="rappels-list"></div>
       </div>
     </section>
 
