@@ -855,17 +855,19 @@ async function loadReplies() {
   const parColonne = { 'a-traiter': [], interesse: [], 'pas-interesse': [], desabonne: [] };
   for (const r of replies) parColonne[colonneDe(r)].push(r);
 
-  // Boutons « classer » : on bascule l'état de SEGMENT (l'« Intéressé » se gère
-  // par le bouton ⭐ existant). On n'affiche pas le bouton de l'état courant.
+  // Boutons « classer » : une destination par colonne. « Intéressé » passe par la
+  // marque ⭐ du contact ; les autres par son segment. On n'affiche pas le bouton
+  // de la colonne où la carte se trouve déjà.
   const MOVES = [
     { key: 'a-traiter', label: '↩ À traiter' },
+    { key: 'interesse', label: '⭐ Intéressé' },
     { key: 'pas-interesse', label: '😐 Pas intéressé' },
     { key: 'desabonne', label: '🔒 Désabonné' },
   ];
 
   const carte = (r) => {
     const verrou = r.segment === 'desabonne';
-    const segActuel = r.segment || 'a-traiter';
+    const segActuel = colonneDe(r);
     return `
     <div class="reply-card ${r.repondu ? 'rc-repondu' : 'rc-attente'}" data-id="${esc(r.contactId)}">
       <div class="rc-head">
@@ -888,7 +890,7 @@ async function loadReplies() {
         <span class="rc-sent" style="color:var(--ok);font-size:13px"></span>
       </div>
       ${r.contactId ? `<div class="rc-move"><span class="rc-move-l">Classer :</span>${
-        MOVES.filter((m) => m.key !== segActuel).map((m) => `<button class="rc-move-btn" data-move="${m.key}" data-id="${esc(r.contactId)}">${m.label}</button>`).join('')
+        MOVES.filter((m) => m.key !== segActuel && !(verrou && m.key === 'interesse')).map((m) => `<button class="rc-move-btn" data-move="${m.key}" data-id="${esc(r.contactId)}" data-interesse="${r.interesse ? 1 : ''}" data-segment="${esc(r.segment || '')}">${m.label}</button>`).join('')
       }</div>` : ''}
       <div class="rc-sent-email" style="display:none"></div>
     </div>`;
@@ -930,13 +932,29 @@ async function loadReplies() {
 
   brancherBoutonsResultat(box, loadReplies);
 
-  // Classer une carte dans une autre liste (segment). L'« Intéressé » (⭐) passe
-  // par le bouton étoile, qui recharge déjà la vue.
+  // Classer une carte dans une autre colonne.
+  //  - vers « Intéressé » : marque ⭐ du contact ; un refus mou repasse à traiter
+  //    (un désabonné reste verrouillé : on ne le sort que par « À traiter »).
+  //  - vers une autre colonne : segment du contact, et on retire la marque ⭐
+  //    sinon la carte resterait affichée dans « Intéressés ».
   $$('.rc-move-btn').forEach((btn) =>
     btn.addEventListener('click', async () => {
       btn.disabled = true;
+      const contactId = btn.dataset.id;
+      const vers = btn.dataset.move;
       try {
-        const r = await api('/replies/segment', 'POST', { contactId: btn.dataset.id, segment: btn.dataset.move });
+        let r;
+        if (vers === 'interesse') {
+          if (btn.dataset.segment === 'pas-interesse') {
+            r = await api('/replies/segment', 'POST', { contactId, segment: 'a-traiter' });
+            if (r && r.error) throw new Error(r.error);
+          }
+          r = await api('/resultats/marquer', 'POST', { contactId, etape: 'interesse' });
+        } else {
+          r = await api('/replies/segment', 'POST', { contactId, segment: vers });
+          if (r && r.error) throw new Error(r.error);
+          if (btn.dataset.interesse) r = await api('/resultats/marquer', 'POST', { contactId, etape: 'interesse', annuler: true });
+        }
         if (r && r.error) throw new Error(r.error);
         await loadReplies();
       } catch (e) {
